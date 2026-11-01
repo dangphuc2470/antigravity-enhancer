@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import { registerExternalOpener } from './externalOpener';
 
 // Unique marker embedded in the patched code
 const PATCH_MARKER = '/* agy-chat-fixed */';
@@ -574,6 +575,9 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('antigravity-clipboard-fix.remove', () => removeFix()),
         vscode.commands.registerCommand('antigravity-clipboard-fix.fixChecksums', () => fixChecksumsOnly())
     );
+
+    // Register external file opener for binaries, office, media, archives
+    registerExternalOpener(context);
 
     // Auto-load pending cascade on window activation or focus
     checkAndAutoLoadPendingCascade();

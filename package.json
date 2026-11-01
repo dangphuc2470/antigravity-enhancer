@@ -54,8 +54,69 @@
         "command": "agi-chat-fix.fixChecksums",
         "category": "Antigravity Enhancer",
         "title": "Dismiss Corrupted Warning (Legacy Alias)"
+      },
+      {
+        "command": "antigravity-enhancer.openExternal",
+        "category": "Antigravity Enhancer",
+        "title": "Open with Default Application"
       }
-    ]
+    ],
+    "customEditors": [
+      {
+        "viewType": "antigravity-enhancer.externalOpener",
+        "displayName": "Open with Default Application",
+        "selector": [
+          {
+            "filenamePattern": "*.{exe,msi,doc,docx,docm,dotx,dotm,rtf,xls,xlsx,xlsm,xlsb,xltx,xltm,ppt,pptx,pptm,pps,ppsx,vsd,vsdx,one,pdf,zip,rar,7z,tar,gz,bz2,xz,iso,mp4,mkv,avi,mov,wmv,flv,webm,m4v,mp3,wav,flac,aac,m4a,ogg,wma,psd,ai,blend,fbx,obj,stl,3ds,c4d,max,apk,aab,ipa,dmg,pkg}"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "antigravity-enhancer.openExternal",
+        "key": "alt+o",
+        "when": "filesExplorerFocus || editorFocus"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "antigravity-enhancer.openExternal",
+          "group": "navigation@100"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "antigravity-enhancer.openExternal",
+          "group": "navigation@100"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Antigravity Enhancer",
+      "properties": {
+        "antigravity-enhancer.externalOpener.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically open binary and external files (e.g. .exe, Office documents, archives, media) with the OS default application when clicked in Explorer."
+        },
+        "antigravity-enhancer.externalOpener.disabledExtensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "List of file extensions to exclude from automatic external opening (e.g. [\"zip\", \"pdf\"])."
+        },
+        "antigravity-enhancer.externalOpener.autoCloseTab": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically close the editor tab after launching the file with the external application."
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "tsc -p ./",

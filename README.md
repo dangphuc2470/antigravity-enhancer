@@ -30,6 +30,11 @@ On Windows, the recent conversation history dropdown often fails to list past ch
 ### 5. Multi-Window Notification Focus
 When background tasks finish, clicking the desktop notification normally opens a duplicate or mismatched chat in whichever window happens to be active. This patch attaches the originating workspace URI to the notification payload, ensuring clicks immediately focus the exact window and task where the work took place.
 
+### 6. Seamless External File Opener
+Clicking binary files (`.exe`, `.msi`), Office documents (`.docx`, `.xlsx`, `.pptx`), media (`.mp4`, `.mp3`), archives (`.zip`, `.rar`, `.7z`), or creative assets (`.blend`, `.psd`) in Explorer automatically launches them with the OS default application and closes the tab instead of failing with an unsupported text encoding error.
+- Shortcut: `Alt + O` (or right-click -> **Open with Default Application**).
+- Configurable via `antigravity-enhancer.externalOpener.enabled` and `disabledExtensions`.
+
 ---
 
 ## Quick Start
