@@ -35,6 +35,18 @@ Clicking binary files (`.exe`, `.msi`), Office documents (`.docx`, `.xlsx`, `.pp
 - Shortcut: `Alt + O` (or right-click -> **Open with Default Application**).
 - Configurable via `antigravity-enhancer.externalOpener.enabled` and `disabledExtensions`.
 
+### 7. Multi-Tab Workspace Chat Bar (Editor-Style Tabs)
+- Transforms the single static chat header into an interactive horizontal tab bar mirroring VS Code editor tabs.
+- **Multi-chat workflow**: Opening past chats in the current workspace or clicking `+` automatically adds them as tabs.
+- **In-place new chat**: Clicking `+` inserts a new conversation tab immediately next to the active tab instead of appending to the far end.
+- **Horizontal mouse wheel scroll**: Smoothly navigate through open chat tabs with standard vertical mouse wheel (`onWheel` translation).
+- **Tab close (`x`)**: Quickly dismiss tabs from the header bar with smooth fallback to adjacent tabs without losing conversation history.
+- **Strict workspace scoping**: Automatically filters and isolates tabs per workspace so projects never cross-contaminate.
+
+### 8. Auto-Submit Permission Dialogs (Full-Access Automation)
+- Eliminates repetitive blocking confirmation dialogs ("Allow reading this URL?", "Allow using this MCP tool?", command execution confirmations).
+- Automatically approves and submits default permission grants within milliseconds, ensuring fully autonomous agent workflows with zero human intervention.
+
 ---
 
 ## Quick Start
