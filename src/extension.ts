@@ -102,6 +102,12 @@ const PATCHED_HHU = "hHu=()=>{let{closeAgentPanel:t,downloadDiagnostics:e,chatPa
 const ORIGINAL_PERMISSION_SUBMIT = 'Ee=me(()=>{ue(!1)},[ue]);return s?E(T9n';
 const PATCHED_PERMISSION_SUBMIT = 'Ee=me(()=>{ue(!1)},[ue]);yt(()=>{if(s&&ae){let _t=setTimeout(()=>{try{ae()}catch(_){}},80);return()=>clearTimeout(_t)}},[s,ae]);return s?E(T9n';
 
+// ==========================================
+// Module 9: Mute Completion Sound on Chat Switch
+// ==========================================
+const ORIGINAL_SOUND_SWITCH = 'var CHu=()=>{let{stepHandler:t,cascadeContext:{state:{agentStateProvider:e}}}=co(),i=j4e(),n=Lc(e,{selector:yHu}),r=Lc(e,{selector:SHu}),s=mt(n),o=mt(r),a=t?.enableSoundsForSpecialEvents;return yt(()=>{let l=!s.current,d=n,u=r;(l&&d||!o.current&&u)&&a&&t?.playSound(Ut(Afu,{soundType:XTn.CASCADE_DONE})),s.current=n,o.current=u},[i,n,r,t,a]),null}';
+const PATCHED_SOUND_SWITCH = 'var CHu=()=>{let{stepHandler:t,cascadeContext:{state:{agentStateProvider:e}}}=co(),c=wC(),_lastC=mt(c),_canPlay=mt(!1),i=j4e(),n=Lc(e,{selector:yHu}),r=Lc(e,{selector:SHu}),s=mt(n),o=mt(r),a=t?.enableSoundsForSpecialEvents;return yt(()=>{if(_lastC.current!==c){_lastC.current=c,s.current=n,o.current=r,_canPlay.current=!1;return}if(!n)_canPlay.current=!0;let l=!s.current,d=n,u=r;_canPlay.current&&(l&&d||!o.current&&u)&&a&&(t?.playSound(Ut(Afu,{soundType:XTn.CASCADE_DONE})),_canPlay.current=!1),s.current=n,o.current=u},[i,n,r,t,a,c]),null}';
+
 // Module 0: Silence Integrity / Corrupt Installation Notification
 const ORIGINAL_SHOW_NOTIF = '_showNotification(){const e=this.productService.checksumFailMoreInfoUrl';
 const PATCHED_SHOW_NOTIF = '_showNotification(){return;const e=this.productService.checksumFailMoreInfoUrl';
@@ -400,6 +406,12 @@ async function applyFix(silent: boolean = false): Promise<boolean> {
         wbModified = true;
     }
 
+    // Module 9: Mute Completion Sound on Chat Switch
+    if (wbContent.includes(ORIGINAL_SOUND_SWITCH)) {
+        wbContent = wbContent.replace(ORIGINAL_SOUND_SWITCH, () => PATCHED_SOUND_SWITCH);
+        wbModified = true;
+    }
+
     // Module 6: Register smartFocusConversation & active cascade tracking in workbench
     if (wbContent.includes(OLD_SMART_FOCUS_TARGET)) {
         wbContent = wbContent.replace(OLD_SMART_FOCUS_TARGET, () => PATCHED_SMART_FOCUS_TARGET);
@@ -569,6 +581,10 @@ async function removeFix(): Promise<boolean> {
             }
             if (wbContent.includes(PATCHED_PERMISSION_SUBMIT)) {
                 wbContent = wbContent.replace(PATCHED_PERMISSION_SUBMIT, () => ORIGINAL_PERMISSION_SUBMIT);
+                modified = true;
+            }
+            if (wbContent.includes(PATCHED_SOUND_SWITCH)) {
+                wbContent = wbContent.replace(PATCHED_SOUND_SWITCH, () => ORIGINAL_SOUND_SWITCH);
                 modified = true;
             }
             if (modified) {
