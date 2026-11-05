@@ -66,20 +66,10 @@ export class ExternalOpenerCustomEditorProvider implements vscode.CustomReadonly
     ): void | Thenable<void> {
         const filePath = document.uri.fsPath;
         const fileName = path.basename(filePath);
-        const ext = path.extname(filePath).replace('.', '').toLowerCase();
+        const revealText = process.platform === 'darwin' ? 'Reveal in Finder' : 'Reveal in File Explorer';
 
         const config = vscode.workspace.getConfiguration('antigravity-enhancer');
-        const enabled = config.get<boolean>('externalOpener.enabled', true);
         const autoCloseTab = config.get<boolean>('externalOpener.autoCloseTab', false);
-        const disabledExtensions = config.get<string[]>('externalOpener.disabledExtensions', [])
-            .map(e => e.toLowerCase().replace('.', ''));
-
-        let isLaunched = false;
-        if (enabled && !disabledExtensions.includes(ext)) {
-            openWithSystemDefault(filePath);
-            vscode.window.setStatusBarMessage(`Opening ${fileName} with default application...`, 3000);
-            isLaunched = true;
-        }
 
         let fileSize = '';
         try {
@@ -133,6 +123,7 @@ export class ExternalOpenerCustomEditorProvider implements vscode.CustomReadonly
                         background-color: var(--vscode-badge-background, #3a3d41);
                         color: var(--vscode-badge-foreground, #ffffff);
                         margin-bottom: 20px;
+                        transition: all 0.2s ease;
                     }
                     .file-meta {
                         font-size: 12px;
@@ -147,48 +138,73 @@ export class ExternalOpenerCustomEditorProvider implements vscode.CustomReadonly
                         justify-content: center;
                         flex-wrap: wrap;
                     }
-                    button {
-                        padding: 8px 16px;
+                    .btn {
+                        display: inline-flex;
+                        align-items: center;
+                        justify-content: center;
+                        padding: 8px 18px;
                         font-size: 13px;
                         font-weight: 500;
-                        border-radius: 3px;
+                        border-radius: 4px;
                         cursor: pointer;
-                        border: 1px solid transparent;
                         outline: none;
                         transition: all 0.15s ease;
+                        min-width: 170px;
+                        box-sizing: border-box;
                     }
-                    button.primary {
-                        background-color: var(--vscode-button-background);
-                        color: var(--vscode-button-foreground);
+                    .btn:active {
+                        transform: translateY(1px);
+                        opacity: 0.9;
                     }
-                    button.primary:hover {
-                        background-color: var(--vscode-button-hoverBackground);
+                    .btn-secondary {
+                        background-color: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.08));
+                        color: var(--vscode-button-secondaryForeground, var(--vscode-foreground, #ffffff));
+                        border: 1px solid var(--vscode-button-border, rgba(255, 255, 255, 0.14));
                     }
-                    button.secondary {
-                        background-color: var(--vscode-button-secondaryBackground, transparent);
-                        color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
-                        border-color: var(--vscode-button-border, rgba(255, 255, 255, 0.15));
+                    .btn-secondary:hover {
+                        background-color: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.14));
                     }
-                    button.secondary:hover {
-                        background-color: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.08));
+                    .btn-primary {
+                        background-color: var(--vscode-button-background, #0078d4);
+                        color: var(--vscode-button-foreground, #ffffff);
+                        border: 1px solid var(--vscode-button-border, transparent);
+                    }
+                    .btn-primary:hover {
+                        background-color: var(--vscode-button-hoverBackground, #026ec1);
                     }
                 </style>
             </head>
             <body>
                 <div class="card">
                     <div class="file-name">${fileName}</div>
-                    <div class="badge">${isLaunched ? 'Opened with Default Application' : 'Ready to Open'}</div>
+                    <div id="statusBadge" class="badge">Ready to Open</div>
                     <div class="file-meta">
                         ${fileSize ? `Size: ${fileSize}<br>` : ''}
                         Path: ${filePath}
                     </div>
                     <div class="actions">
-                        <button class="primary" onclick="vscode.postMessage({ command: 'open' })">Open with Default Application</button>
-                        <button class="secondary" onclick="vscode.postMessage({ command: 'reveal' })">Reveal in File Explorer</button>
+                        <button class="btn btn-secondary" onclick="revealFile()">${revealText}</button>
+                        <button class="btn btn-primary" onclick="openFile()">Open with Default Application</button>
                     </div>
                 </div>
                 <script>
                     const vscode = acquireVsCodeApi();
+                    function openFile() {
+                        vscode.postMessage({ command: 'open' });
+                    }
+                    function revealFile() {
+                        vscode.postMessage({ command: 'reveal' });
+                    }
+                    window.addEventListener('message', event => {
+                        const message = event.data;
+                        if (message.type === 'opened') {
+                            const badge = document.getElementById('statusBadge');
+                            if (badge) {
+                                badge.textContent = 'Opened with Default Application';
+                                badge.style.backgroundColor = 'var(--vscode-testing-iconPassed, #238636)';
+                            }
+                        }
+                    });
                 </script>
             </body>
             </html>
@@ -198,16 +214,16 @@ export class ExternalOpenerCustomEditorProvider implements vscode.CustomReadonly
             if (msg.command === 'open') {
                 openWithSystemDefault(filePath);
                 vscode.window.setStatusBarMessage(`Opening ${fileName} with default application...`, 3000);
+                webviewPanel.webview.postMessage({ type: 'opened' });
+                if (autoCloseTab) {
+                    setTimeout(() => {
+                        webviewPanel.dispose();
+                    }, 500);
+                }
             } else if (msg.command === 'reveal') {
                 vscode.commands.executeCommand('revealFileInOS', document.uri);
             }
         });
-
-        if (autoCloseTab) {
-            setTimeout(() => {
-                webviewPanel.dispose();
-            }, 50);
-        }
     }
 }
 

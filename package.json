@@ -2,7 +2,7 @@
   "name": "antigravity-enhancer",
   "displayName": "Antigravity Enhancer",
   "description": "Essential UX enhancements and native workflow patches for Google Antigravity IDE: instant clipboard paste, seamless cross-workspace switching, conversation forking, workspace chat tabs, auto-submit permission prompts, and notification focus.",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "publisher": "dangphuc2470",
   "author": {
     "name": "dangphuc2470",
@@ -100,7 +100,7 @@
         "antigravity-enhancer.externalOpener.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically open binary and external files (e.g. .exe, Office documents, archives, media) with the OS default application when clicked in Explorer."
+          "description": "Enable external file viewer tab for binary and external files (e.g. .exe, Office documents, archives, media)."
         },
         "antigravity-enhancer.externalOpener.disabledExtensions": {
           "type": "array",
