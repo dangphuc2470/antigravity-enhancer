@@ -61,6 +61,12 @@ const PATCHED_FORK_HISTORICAL_V2 = 'conversationForkingHistoricalStep??!0';
 const ORIGINAL_FORK_BTN = 'i&&ue&&E(fxu,{steps:t})';
 const PATCHED_FORK_BTN = 'ue&&E(fxu,{steps:t})';
 
+const ORIGINAL_HXU = 'function hxu(t){let e=wC(),{forkConversation:i}=Wa(),n=nN(),r=Xd(),s=Jv(),[o,a]=We(!1),l=Re(()=>{let u=t[t.length-1];return iE(u?.metadata,null)??0},[t]),d=me(async()=>{if(!(!e||o)){a(!0);try{let u=await i({sourceCascadeId:e,forkAtStepIndex:l,targetForkWorkspace:QJt.CURRENT_WORKSPACE});u?.newCascadeId&&n(u.newCascadeId)}catch(u){r(po.CONVERSATION_FORK_FAILED,u),s({title:"Failed to fork conversation",message:rc(u),tag:"conversation-fork-error"})}finally{a(!1)}}},[e,i,o,l,n,r,s]);return{isForking:o,forkInCurrentWorkspace:d}}';
+const PATCHED_HXU = 'function hxu(t){let e=wC(),{cascadeContext:{events:{setCascadeId:oSet}}}=co(),{forkConversation:i}=Wa(),n=nN(),r=Xd(),s=Jv(),[o,a]=We(!1),l=Re(()=>{let u=t[t.length-1];return iE(u?.metadata,null)??0},[t]),d=me(async()=>{if(!(!e||o)){a(!0);try{let u=await i({sourceCascadeId:e,forkAtStepIndex:l,targetForkWorkspace:QJt.CURRENT_WORKSPACE});if(u?.newCascadeId){try{oSet(u.newCascadeId)}catch(_){}try{n(u.newCascadeId)}catch(_){}}}catch(u){r(po.CONVERSATION_FORK_FAILED,u),s({title:"Failed to fork conversation",message:rc(u),tag:"conversation-fork-error"})}finally{a(!1)}}},[e,i,o,l,n,r,s,oSet]);return{isForking:o,forkInCurrentWorkspace:d}}';
+
+const ORIGINAL_FXU = 'var fxu=({steps:t})=>{let{isForking:e,forkInCurrentWorkspace:i}=hxu(t),n=Ya();return E(Uu.Root,{placement:"top-end",children:[E(Uu.Trigger,{asChild:!0,children:E(mn,{variant:"ghost",size:"icon",disabled:e,"aria-label":"Fork Conversation","data-tooltip-id":`fork-${n}`,className:"text-secondary-foreground hover:text-foreground",children:e?E(Fc,{className:"h-4 w-4"}):E($e,{name:"fork_left",className:"h-4 w-4"})})}),E(Sr,{id:`fork-${n}`,place:"top-end",children:e?"Creating Fork...":"Fork Conversation"}),E(Uu.Content,{className:"w-52 py-1",children:E(Uu.Close,{asChild:!0,children:E(Uu.Item,{onClick:i,children:E("span",{children:"Fork in current workspace"})})})})]})}'
+const PATCHED_FXU = 'var fxu=({steps:t})=>{let{isForking:e,forkInCurrentWorkspace:i}=hxu(t),n=Ya();return E(Ii,{children:[E(mn,{variant:"ghost",size:"icon",disabled:e,onClick:i,"aria-label":"Fork Conversation","data-tooltip-id":`fork-${n}`,className:"text-secondary-foreground hover:text-foreground",children:e?E(Fc,{className:"h-4 w-4"}):E($e,{name:"fork_left",className:"h-4 w-4"})}),E(Sr,{id:`fork-${n}`,place:"top-end",children:e?"Creating Fork...":"Fork Conversation"})]})}'
+
 // ==========================================
 // Module 4: Legacy Archive Link Reverter
 // ==========================================
@@ -376,6 +382,14 @@ async function applyFix(silent: boolean = false): Promise<boolean> {
         wbContent = wbContent.replace(ORIGINAL_FORK_BTN, () => PATCHED_FORK_BTN);
         wbModified = true;
     }
+    if (wbContent.includes(ORIGINAL_HXU)) {
+        wbContent = wbContent.replace(ORIGINAL_HXU, () => PATCHED_HXU);
+        wbModified = true;
+    }
+    if (wbContent.includes(ORIGINAL_FXU)) {
+        wbContent = wbContent.replace(ORIGINAL_FXU, () => PATCHED_FXU);
+        wbModified = true;
+    }
 
     // Module 4: Revert Archive Link if previously patched
     if (wbContent.includes(PATCHED_IXU)) {
@@ -585,6 +599,14 @@ async function removeFix(): Promise<boolean> {
             }
             if (wbContent.includes(PATCHED_SOUND_SWITCH)) {
                 wbContent = wbContent.replace(PATCHED_SOUND_SWITCH, () => ORIGINAL_SOUND_SWITCH);
+                modified = true;
+            }
+            if (wbContent.includes(PATCHED_HXU)) {
+                wbContent = wbContent.replace(PATCHED_HXU, () => ORIGINAL_HXU);
+                modified = true;
+            }
+            if (wbContent.includes(PATCHED_FXU)) {
+                wbContent = wbContent.replace(PATCHED_FXU, () => ORIGINAL_FXU);
                 modified = true;
             }
             if (modified) {
