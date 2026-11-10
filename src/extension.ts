@@ -34,6 +34,14 @@ const PATCHED_CM_V2 = '/* agy-chat-fixed */onContextMenu(e,i){if(i.defaultPreven
 // ==========================================
 // Module 2: Windows Workspace URI Normalization
 // ==========================================
+// ==========================================
+// Module 12: Exact Date Formatting for Conversations
+// ==========================================
+const ORIGINAL_BZT = `bzt=t=>{let e=Syu(t);if(e.endsWith("second")||e.endsWith("seconds"))return"now";let i={hour:"h",day:"d",week:"w",month:"mo",year:"y",minute:"m"};for(let[n,r]of Object.entries(i))if(e.endsWith(\` \${n}s\`)||e.endsWith(\` \${n}\`))return e.replace(new RegExp(\`\\s*\${n}s?\$\`),r);return e}`;
+const PATCHED_BZT = `bzt=t=>{try{let d=t instanceof Date?t:new Date(t);if(!isNaN(d.getTime())){let n=new Date(),D=d.getDate(),M=d.getMonth()+1,Y=d.getFullYear();return Y===n.getFullYear()?\`\${D}/\${M}\`:\`\${D}/\${M}/\${Y}\`}}catch{}return""}`;
+const ORIGINAL_Y3U_DETAIL = 'detail:a?Vna(a,!0):""';
+const PATCHED_Y3U_DETAIL = 'detail:a?bzt(a):""';
+
 const ORIGINAL_B5U = 'function B5u(t,e,i){return Object.entries(t.summaries).sort((n,r)=>Number((r[1].lastUserInputTime&&kb(r[1].lastUserInputTime))?.getTime()??0)-Number((n[1].lastUserInputTime&&kb(n[1].lastUserInputTime))?.getTime()??0)).filter(([,n])=>i&&n.trajectoryMetadata?.parentConversationId?!1:n.workspaces.map(r=>r.workspaceFolderAbsoluteUri).some(r=>e.includes(r))).map(([n])=>n)}';
 const PATCHED_B5U = 'function B5u(t,e,i){let _n=u=>{try{let s=decodeURIComponent(u||"").toLowerCase().split("\\\\").join("/");while(s.endsWith("/"))s=s.slice(0,-1);return s}catch{let s=String(u||"").toLowerCase().split("\\\\").join("/");while(s.endsWith("/"))s=s.slice(0,-1);return s}};let _E=(e||[]).map(_n);return Object.entries(t.summaries).sort((n,r)=>Number((r[1].lastUserInputTime&&kb(r[1].lastUserInputTime))?.getTime()??0)-Number((n[1].lastUserInputTime&&kb(n[1].lastUserInputTime))?.getTime()??0)).filter(([,n])=>i&&n.trajectoryMetadata?.parentConversationId?!1:n.workspaces.map(r=>_n(r.workspaceFolderAbsoluteUri)).some(r=>_E.includes(r))).map(([n])=>n)}';
 
@@ -362,6 +370,18 @@ async function applyFix(silent: boolean = false): Promise<boolean> {
     }
 
     // Module 2: Windows Workspace URI Normalization
+    if (wbContent.includes(ORIGINAL_U5U)) {
+        wbContent = wbContent.replace(ORIGINAL_U5U, () => PATCHED_U5U);
+        wbModified = true;
+    }
+    if (wbContent.includes(ORIGINAL_BZT)) {
+        wbContent = wbContent.replace(ORIGINAL_BZT, () => PATCHED_BZT);
+        wbModified = true;
+    }
+    if (wbContent.includes(ORIGINAL_Y3U_DETAIL)) {
+        wbContent = wbContent.replace(ORIGINAL_Y3U_DETAIL, () => PATCHED_Y3U_DETAIL);
+        wbModified = true;
+    }
     if (wbContent.includes(ORIGINAL_B5U)) {
         wbContent = wbContent.replace(ORIGINAL_B5U, () => PATCHED_B5U);
         wbModified = true;
