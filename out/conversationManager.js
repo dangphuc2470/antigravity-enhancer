@@ -177,6 +177,13 @@ class ConversationManagerProvider {
     async reload() {
         await this._loadConversations();
     }
+    updateData(conversations) {
+        this._conversations = conversations;
+        this._sendState();
+        if (this._selectedId) {
+            this._sendDetail(this._selectedId);
+        }
+    }
     static normalizePath(uriOrPath) {
         try {
             let s = decodeURIComponent(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
@@ -245,7 +252,7 @@ class ConversationManagerProvider {
         }
         return map;
     }
-    _writeDiskCache(conversations) {
+    static writeDiskCache(conversations) {
         try {
             const dir = path.dirname(ConversationManagerProvider.CACHE_FILE);
             if (!fs.existsSync(dir))
@@ -257,6 +264,9 @@ class ConversationManagerProvider {
             fs.writeFileSync(ConversationManagerProvider.CACHE_FILE, JSON.stringify(payload), 'utf8');
         }
         catch { }
+    }
+    _writeDiskCache(conversations) {
+        ConversationManagerProvider.writeDiskCache(conversations);
     }
     _tsToMs(ts) {
         if (!ts)
@@ -1959,7 +1969,7 @@ class ConversationManagerProvider {
     }
   });
 
-  document.getElementById('convList').addEventListener('contextmenu', ev => {
+  document.addEventListener('contextmenu', ev => {
     const item = ev.target.closest('.conv-item[data-id]');
     if (item) {
       ev.preventDefault();
@@ -1967,6 +1977,10 @@ class ConversationManagerProvider {
       if (id) {
         selectConversation(id);
         showContextMenu(ev.clientX, ev.clientY, id);
+      }
+    } else {
+      if (!ev.target.closest('input, textarea')) {
+        ev.preventDefault();
       }
     }
   });

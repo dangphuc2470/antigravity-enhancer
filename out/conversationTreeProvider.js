@@ -1,6 +1,42 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ConversationExplorerViewProvider = void 0;
+const vscode = __importStar(require("vscode"));
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
 const conversationManager_1 = require("./conversationManager");
 class ConversationExplorerViewProvider {
     constructor(extensionUri) {
@@ -73,11 +109,131 @@ class ConversationExplorerViewProvider {
                 case 'refresh':
                     await this.refresh();
                     break;
+                case 'moveFolder':
+                    await this._moveFolderConversations(message.folder);
+                    break;
+                case 'revealFolder':
+                    if (message.folder && fs.existsSync(message.folder)) {
+                        vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(message.folder));
+                    }
+                    else {
+                        vscode.window.showWarningMessage('Folder does not exist on disk.');
+                    }
+                    break;
+                case 'copyPath':
+                    if (message.path) {
+                        await vscode.env.clipboard.writeText(message.path);
+                        vscode.window.showInformationMessage(`Copied: ${message.path}`);
+                    }
+                    break;
             }
         });
         webviewView.onDidDispose(() => {
             this._view = undefined;
         });
+    }
+    async _moveFolderConversations(folderPath) {
+        if (!folderPath)
+            return;
+        const matching = this._conversations.filter(c => conversationManager_1.ConversationManagerProvider.matchesFolder(c, folderPath.toLowerCase(), this._includeSubfolders));
+        if (matching.length === 0) {
+            vscode.window.showInformationMessage('No conversations found in this folder.');
+            return;
+        }
+        const isStandalone = folderPath === 'Standalone' || folderPath === '(No Workspace)';
+        const folderLabel = isStandalone ? 'Standalone' : (folderPath.split('/').filter(Boolean).pop() || folderPath);
+        const currentWs = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0])
+            ? conversationManager_1.ConversationManagerProvider.normalizePath(vscode.workspace.workspaceFolders[0].uri.fsPath)
+            : '';
+        const knownSet = new Set();
+        for (const c of this._conversations) {
+            for (const w of c.workspaces) {
+                if (w && w !== 'Standalone' && w !== '(No Workspace)') {
+                    knownSet.add(w);
+                }
+            }
+        }
+        if (currentWs)
+            knownSet.add(currentWs);
+        const items = [];
+        items.push({
+            label: '$(symbol-misc) Standalone',
+            description: 'No workspace attached',
+            detail: `Convert ${matching.length} conversation(s) to standalone`
+        });
+        if (currentWs && currentWs.toLowerCase() !== folderPath.toLowerCase()) {
+            items.push({
+                label: `$(folder-active) ${path.basename(currentWs)}`,
+                description: currentWs,
+                detail: 'Current open workspace in editor'
+            });
+        }
+        const otherWorkspaces = Array.from(knownSet)
+            .filter(w => w.toLowerCase() !== folderPath.toLowerCase() && w !== currentWs)
+            .sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
+        for (const ws of otherWorkspaces) {
+            const exists = fs.existsSync(ws);
+            items.push({
+                label: `$(folder) ${path.basename(ws)}${exists ? '' : ' (orphaned)'}`,
+                description: ws,
+                detail: exists ? undefined : 'Folder no longer exists on disk'
+            });
+        }
+        items.push({
+            label: '$(folder-opened) Browse other folder...',
+            description: 'Choose a different folder from disk...'
+        });
+        const selected = await vscode.window.showQuickPick(items, {
+            placeHolder: `Move ${matching.length} conversation(s) from "${folderLabel}" to...`,
+            title: `Move All Conversations in "${folderLabel}"`
+        });
+        if (!selected)
+            return;
+        let targetPath = null;
+        if (selected.label.includes('Standalone')) {
+            targetPath = 'STANDALONE';
+        }
+        else if (selected.label.includes('Browse other folder...')) {
+            const uris = await vscode.window.showOpenDialog({
+                canSelectFiles: false,
+                canSelectFolders: true,
+                canSelectMany: false,
+                openLabel: 'Select Target Folder',
+                title: `Choose Workspace Folder for ${matching.length} Conversation(s)`
+            });
+            if (uris && uris.length > 0) {
+                targetPath = uris[0].fsPath;
+            }
+            else {
+                return;
+            }
+        }
+        else {
+            targetPath = selected.description || selected.label;
+        }
+        if (!targetPath)
+            return;
+        for (const conv of matching) {
+            if (targetPath === 'STANDALONE') {
+                conv.workspaces = [];
+                conv.rawWorkspaces = [];
+                conv.userWorkspaces = [];
+                conv.isOrphaned = false;
+            }
+            else {
+                const norm = conversationManager_1.ConversationManagerProvider.normalizePath(targetPath);
+                conv.workspaces = [norm];
+                conv.rawWorkspaces = [vscode.Uri.file(targetPath).toString()];
+                conv.userWorkspaces = [norm];
+                conv.isOrphaned = !fs.existsSync(norm);
+            }
+        }
+        conversationManager_1.ConversationManagerProvider.writeDiskCache(this._conversations);
+        this._sendState();
+        if (conversationManager_1.ConversationManagerProvider.currentInstance) {
+            conversationManager_1.ConversationManagerProvider.currentInstance.updateData(this._conversations);
+        }
+        vscode.window.showInformationMessage(`Moved ${matching.length} conversation(s) from "${folderLabel}" to ${targetPath === 'STANDALONE' ? 'Standalone' : targetPath}`);
     }
     _sendState() {
         if (!this._view)
@@ -267,6 +423,54 @@ class ConversationExplorerViewProvider {
       user-select: none;
     }
     .subfolders-toggle input, .subfolders-toggle label { cursor: pointer; }
+    .context-backdrop {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 9998;
+      display: none;
+    }
+    .context-menu {
+      position: fixed;
+      z-index: 9999;
+      background: var(--vscode-menu-background, #252526);
+      color: var(--vscode-menu-foreground, #cccccc);
+      border: 1px solid var(--vscode-menu-border, #454545);
+      border-radius: 5px;
+      padding: 4px 0;
+      min-width: 175px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+      display: none;
+      font-size: 11.5px;
+      user-select: none;
+    }
+    .context-menu-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 5px 12px;
+      cursor: pointer;
+    }
+    .context-menu-item:hover {
+      background: var(--vscode-menu-selectionBackground, #04395e);
+      color: var(--vscode-menu-selectionForeground, #ffffff);
+    }
+    .context-menu-item svg {
+      width: 14px;
+      height: 14px;
+      opacity: 0.85;
+      flex-shrink: 0;
+    }
+    .context-menu-item:hover svg {
+      opacity: 1;
+    }
+    .context-menu-separator {
+      height: 1px;
+      background: var(--vscode-menu-separatorBackground, #454545);
+      margin: 4px 0;
+    }
   </style>
 </head>
 <body>
@@ -283,6 +487,8 @@ class ConversationExplorerViewProvider {
     <input type="checkbox" id="chkSubfolders" checked>
     <label for="chkSubfolders">Include subfolders recursively</label>
   </div>
+  <div class="context-backdrop" id="contextBackdrop"></div>
+  <div class="context-menu" id="treeContextMenu"></div>
 
   <script>
     const vscode = acquireVsCodeApi();
@@ -433,6 +639,118 @@ class ConversationExplorerViewProvider {
         }
         document.getElementById('chkSubfolders').checked = Boolean(state.includeSubfolders);
         renderFolderTree();
+      }
+    });
+
+    let currentContextMenuFolder = null;
+    const treeContextMenu = document.getElementById('treeContextMenu');
+    const contextBackdrop = document.getElementById('contextBackdrop');
+
+    function hideContextMenu() {
+      if (treeContextMenu) treeContextMenu.style.display = 'none';
+      if (contextBackdrop) contextBackdrop.style.display = 'none';
+      currentContextMenuFolder = null;
+    }
+
+    if (contextBackdrop) {
+      contextBackdrop.addEventListener('click', hideContextMenu);
+      contextBackdrop.addEventListener('contextmenu', e => {
+        e.preventDefault();
+        hideContextMenu();
+      });
+    }
+
+    document.addEventListener('click', () => hideContextMenu());
+    window.addEventListener('blur', () => hideContextMenu());
+
+    document.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      const itemEl = e.target.closest('.tree-item');
+      if (!itemEl) {
+        hideContextMenu();
+        return;
+      }
+
+      const folder = itemEl.getAttribute('data-folder');
+      if (!folder) {
+        hideContextMenu();
+        return;
+      }
+
+      currentContextMenuFolder = folder;
+      const isAll = folder === 'ALL';
+      const isCurrent = folder === 'CURRENT';
+      const isStandalone = folder === 'Standalone' || folder === '(No Workspace)';
+
+      let menuHtml = '';
+      if (!isAll && !isCurrent) {
+        menuHtml += '<div class="context-menu-item" data-action="move">' +
+          '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10l-.5-.5zm-.5 10H2V3h4.29l.86.85.35.15H14v9z"/></svg>' +
+          '<span>Move All to Folder...</span>' +
+          '</div>';
+
+        if (!isStandalone) {
+          menuHtml += '<div class="context-menu-item" data-action="reveal">' +
+            '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 14h10.23a1.5 1.5 0 0 0 1.41-1l2-5.5A1.5 1.5 0 0 0 13.73 5.5H7.71l-.85-.85L6.51 4h-5l-.5.5v9l.5.5zm1-8.5h3.79l.86.85.35.15H13.73a.5.5 0 0 1 .47.67l-2 5.5a.5.5 0 0 1-.47.33H2.5v-7.5z"/></svg>' +
+            '<span>Reveal in File Explorer</span>' +
+            '</div>';
+          menuHtml += '<div class="context-menu-item" data-action="copyPath">' +
+            '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 4h7v1H4V4zm0 3h7v1H4V7zm0 3h5v1H4v-1zm9-8H3a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1zm0 13H3V3h10v12z"/></svg>' +
+            '<span>Copy Path</span>' +
+            '</div>';
+        }
+        menuHtml += '<div class="context-menu-separator"></div>';
+      }
+
+      menuHtml += '<div class="context-menu-item" data-action="expandAll">' +
+        '<span>Expand All</span>' +
+        '</div>';
+      menuHtml += '<div class="context-menu-item" data-action="collapseAll">' +
+        '<span>Collapse All</span>' +
+        '</div>';
+      menuHtml += '<div class="context-menu-item" data-action="refresh">' +
+        '<span>Refresh</span>' +
+        '</div>';
+
+      treeContextMenu.innerHTML = menuHtml;
+      treeContextMenu.style.display = 'block';
+      if (contextBackdrop) contextBackdrop.style.display = 'block';
+
+      const menuWidth = 180;
+      const menuHeight = 150;
+      let posX = e.clientX;
+      let posY = e.clientY;
+
+      if (posX + menuWidth > window.innerWidth) {
+        posX = Math.max(4, window.innerWidth - menuWidth - 6);
+      }
+      if (posY + menuHeight > window.innerHeight) {
+        posY = Math.max(4, window.innerHeight - menuHeight - 6);
+      }
+
+      treeContextMenu.style.left = posX + 'px';
+      treeContextMenu.style.top = posY + 'px';
+    });
+
+    treeContextMenu.addEventListener('click', e => {
+      const item = e.target.closest('.context-menu-item');
+      if (!item) return;
+      const action = item.getAttribute('data-action');
+      const folder = currentContextMenuFolder;
+      hideContextMenu();
+
+      if (action === 'move' && folder) {
+        vscode.postMessage({ type: 'moveFolder', folder });
+      } else if (action === 'reveal' && folder) {
+        vscode.postMessage({ type: 'revealFolder', folder });
+      } else if (action === 'copyPath' && folder) {
+        vscode.postMessage({ type: 'copyPath', path: folder });
+      } else if (action === 'expandAll') {
+        document.getElementById('btnExpandAll').click();
+      } else if (action === 'collapseAll') {
+        document.getElementById('btnCollapseAll').click();
+      } else if (action === 'refresh') {
+        vscode.postMessage({ type: 'refresh' });
       }
     });
 

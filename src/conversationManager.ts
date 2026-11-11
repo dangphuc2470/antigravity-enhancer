@@ -211,6 +211,14 @@ export class ConversationManagerProvider {
         await this._loadConversations();
     }
 
+    public updateData(conversations: CachedConversation[]) {
+        this._conversations = conversations;
+        this._sendState();
+        if (this._selectedId) {
+            this._sendDetail(this._selectedId);
+        }
+    }
+
     public static normalizePath(uriOrPath: string): string {
         try {
             let s = decodeURIComponent(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
@@ -275,7 +283,7 @@ export class ConversationManagerProvider {
         return map;
     }
 
-    private _writeDiskCache(conversations: CachedConversation[]) {
+    public static writeDiskCache(conversations: CachedConversation[]) {
         try {
             const dir = path.dirname(ConversationManagerProvider.CACHE_FILE);
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -285,6 +293,10 @@ export class ConversationManagerProvider {
             };
             fs.writeFileSync(ConversationManagerProvider.CACHE_FILE, JSON.stringify(payload), 'utf8');
         } catch {}
+    }
+
+    private _writeDiskCache(conversations: CachedConversation[]) {
+        ConversationManagerProvider.writeDiskCache(conversations);
     }
 
     private _tsToMs(ts: any): number {
@@ -2039,7 +2051,7 @@ export class ConversationManagerProvider {
     }
   });
 
-  document.getElementById('convList').addEventListener('contextmenu', ev => {
+  document.addEventListener('contextmenu', ev => {
     const item = ev.target.closest('.conv-item[data-id]');
     if (item) {
       ev.preventDefault();
@@ -2047,6 +2059,10 @@ export class ConversationManagerProvider {
       if (id) {
         selectConversation(id);
         showContextMenu(ev.clientX, ev.clientY, id);
+      }
+    } else {
+      if (!ev.target.closest('input, textarea')) {
+        ev.preventDefault();
       }
     }
   });
