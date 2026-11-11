@@ -2,7 +2,7 @@
   "name": "antigravity-enhancer",
   "displayName": "Antigravity Enhancer",
   "description": "Essential UX enhancements and native workflow patches for Google Antigravity IDE: instant clipboard paste, seamless cross-workspace switching, conversation forking, workspace chat tabs, auto-submit permission prompts, and notification focus.",
-  "version": "1.5.8",
+  "version": "1.6.0",
   "publisher": "dangphuc2470",
   "author": {
     "name": "dangphuc2470",
@@ -25,6 +25,16 @@
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "antigravity.openConversationManager",
+        "category": "Antigravity Enhancer",
+        "title": "Open Conversation Manager"
+      },
+      {
+        "command": "antigravity-enhancer.openConversationManager",
+        "category": "Antigravity Enhancer",
+        "title": "Open Conversation Manager"
+      },
       {
         "command": "antigravity-enhancer.apply",
         "category": "Antigravity Enhancer",
@@ -74,6 +84,11 @@
       }
     ],
     "keybindings": [
+      {
+        "command": "antigravity.openConversationManager",
+        "key": "ctrl+alt+c",
+        "mac": "cmd+alt+c"
+      },
       {
         "command": "antigravity-enhancer.openExternal",
         "key": "alt+o",
