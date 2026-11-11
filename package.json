@@ -81,6 +81,11 @@
         "command": "antigravity-enhancer.openExternal",
         "category": "Antigravity Enhancer",
         "title": "Open with Default Application"
+      },
+      {
+        "command": "antigravity.openTrafficReport",
+        "category": "Antigravity Enhancer",
+        "title": "Open API Traffic & Token Report"
       }
     ],
     "viewsContainers": {

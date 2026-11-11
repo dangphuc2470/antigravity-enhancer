@@ -6,6 +6,7 @@ import * as crypto from 'crypto';
 import { registerExternalOpener } from './externalOpener';
 import { ConversationManagerProvider } from './conversationManager';
 import { ConversationExplorerViewProvider } from './conversationTreeProvider';
+import { TrafficReportPanel } from './trafficReportPanel';
 
 // Unique marker embedded in the patched code
 const PATCH_MARKER = '/* agy-chat-fixed */';
@@ -821,6 +822,9 @@ export function activate(context: vscode.ExtensionContext) {
         }),
         vscode.commands.registerCommand('antigravity.refreshConversationTree', async () => {
             await explorerProvider.refresh();
+        }),
+        vscode.commands.registerCommand('antigravity.openTrafficReport', () => {
+            TrafficReportPanel.createOrShow(context.extensionUri);
         })
     );
 

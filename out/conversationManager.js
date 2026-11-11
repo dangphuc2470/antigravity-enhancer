@@ -147,6 +147,9 @@ class ConversationManagerProvider {
                 case 'moveConversation':
                     await this._moveConversation(message.id);
                     break;
+                case 'openTrafficReport':
+                    await this._openTrafficReport();
+                    break;
             }
         }, null, this._disposables);
         this._loadConversations();
@@ -183,6 +186,10 @@ class ConversationManagerProvider {
         if (this._selectedId) {
             this._sendDetail(this._selectedId);
         }
+    }
+    async _openTrafficReport() {
+        const { TrafficReportPanel } = require('./trafficReportPanel');
+        TrafficReportPanel.createOrShow(this._extensionUri, this._conversations);
     }
     static normalizePath(uriOrPath) {
         try {
@@ -745,10 +752,15 @@ class ConversationManagerProvider {
                 const titleMatch = c.title.toLowerCase().includes(q);
                 if (this._searchMode === 'title')
                     return titleMatch;
+                const wsMatch = (c.workspaces || []).some(w => w.toLowerCase().includes(q))
+                    || (c.userWorkspaces || []).some(w => w.toLowerCase().includes(q))
+                    || (c.rawWorkspaces || []).some(w => w.toLowerCase().includes(q))
+                    || (c.workspaces.length === 0 && 'standalone'.includes(q));
+                if (this._searchMode === 'path')
+                    return wsMatch;
                 const snippetMatch = (c.firstMessageSnippet || '').toLowerCase().includes(q);
                 const contentMatch = (c.searchableContent || '').toLowerCase().includes(q);
                 const idMatch = c.id.toLowerCase().includes(q);
-                const wsMatch = c.workspaces.some(w => w.toLowerCase().includes(q));
                 if (this._searchMode === 'content') {
                     return contentMatch || snippetMatch;
                 }
@@ -783,6 +795,13 @@ class ConversationManagerProvider {
                     const end = Math.min(c.searchableContent.length, idx + q.length + 80);
                     matchSnippet = (start > 0 ? '...' : '') + c.searchableContent.slice(start, end) + (end < c.searchableContent.length ? '...' : '');
                 }
+            }
+            if (this._searchMode === 'path' || (!c.searchableContent && (c.workspaces || []).some(w => w.toLowerCase().includes(q)))) {
+                const matchedWs = (c.workspaces || []).find(w => w.toLowerCase().includes(q))
+                    || (c.userWorkspaces || []).find(w => w.toLowerCase().includes(q))
+                    || (c.rawWorkspaces || []).find(w => w.toLowerCase().includes(q))
+                    || 'Standalone';
+                matchSnippet = 'Path: ' + matchedWs;
             }
             const { searchableContent, ...rest } = c;
             return { ...rest, matchSnippet };
@@ -917,10 +936,17 @@ class ConversationManagerProvider {
             messages
         });
     }
-    async _openInChat(id) {
-        const conv = this._conversations.find(c => c.id === id);
+    static async openInChat(id, cachedConv) {
+        let conv = cachedConv;
+        if (!conv && ConversationManagerProvider.currentInstance) {
+            conv = ConversationManagerProvider.currentInstance._conversations.find(c => c.id === id);
+        }
+        if (!conv) {
+            const list = ConversationManagerProvider.readDiskCache();
+            conv = list.find(c => c.id === id);
+        }
         const curWs = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0])
-            ? this._normalizePath(vscode.workspace.workspaceFolders[0].uri.fsPath).toLowerCase()
+            ? ConversationManagerProvider.normalizePath(vscode.workspace.workspaceFolders[0].uri.fsPath).toLowerCase()
             : '';
         const convWorkspaces = conv?.workspaces || [];
         const sameWorkspace = convWorkspaces.length === 0 || (curWs && convWorkspaces.some(w => w.toLowerCase() === curWs));
@@ -958,7 +984,7 @@ class ConversationManagerProvider {
             }
         }
     }
-    async _openTranscriptLog(id) {
+    static async openTranscriptLog(id) {
         const transcriptPath = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'brain', id, '.system_generated', 'logs', 'transcript.jsonl');
         if (fs.existsSync(transcriptPath)) {
             const doc = await vscode.workspace.openTextDocument(transcriptPath);
@@ -974,6 +1000,12 @@ class ConversationManagerProvider {
                 vscode.window.showErrorMessage('No transcript log found for this conversation.');
             }
         }
+    }
+    async _openInChat(id) {
+        await ConversationManagerProvider.openInChat(id);
+    }
+    async _openTranscriptLog(id) {
+        await ConversationManagerProvider.openTranscriptLog(id);
     }
     async _requestRename(id, oldTitle) {
         const newTitle = await vscode.window.showInputBox({
@@ -1782,13 +1814,14 @@ class ConversationManagerProvider {
       <div class="folder-overview" id="folderOverview"></div>
       <div class="search-box">
         <div class="search-input-wrapper">
-          <input type="text" id="searchInput" class="search-input" placeholder="Search title or chat content...">
+          <input type="text" id="searchInput" class="search-input" placeholder="Search title, content, or workspace path...">
           <button class="search-clear" id="btnClearSearch" title="Clear search">&times;</button>
         </div>
         <div class="filter-chips">
           <div class="chip active" id="chipAll" data-mode="all">All</div>
           <div class="chip" id="chipTitle" data-mode="title">Title</div>
           <div class="chip" id="chipContent" data-mode="content">Content</div>
+          <div class="chip" id="chipPath" data-mode="path">Path</div>
           <select id="sortSelect" class="sort-select" title="Sort conversations">
             <option value="recent">Recent</option>
             <option value="oldest">Oldest</option>
@@ -2002,11 +2035,20 @@ class ConversationManagerProvider {
       vscode.postMessage({ type: 'moveConversation', id });
     } else if (action === 'delete' && id) {
       vscode.postMessage({ type: 'delete', id });
+    } else if (action === 'openTrafficReport') {
+      vscode.postMessage({ type: 'openTrafficReport' });
     } else if (action === 'copy') {
       const text = btn.getAttribute('data-copy') || '';
       vscode.postMessage({ type: 'copy', text });
     } else if (action === 'jumpConv' && id) {
       selectConversation(id);
+    }
+  });
+
+  document.getElementById('folderOverview').addEventListener('click', ev => {
+    const btn = ev.target.closest('[data-action="openTrafficReport"]');
+    if (btn) {
+      vscode.postMessage({ type: 'openTrafficReport' });
     }
   });
 
@@ -2075,8 +2117,9 @@ class ConversationManagerProvider {
 
   function formatNumber(num) {
     if (!num) return '0';
-    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
-    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    if (num >= 1000000000) return (num / 1000000000).toFixed(2).replace(/\.00$/, '').replace(/(\.[1-9])0$/, '$1') + 'B';
+    if (num >= 1000000) return (num / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
     return String(num);
   }
 
@@ -2176,10 +2219,10 @@ class ConversationManagerProvider {
           '<div class="m3-value">~' + formatNumber(tokens) + '</div>' +
           '<div class="m3-sub">active context</div>' +
         '</div>' +
-        '<div class="m3-stat-card">' +
+        '<div class="m3-stat-card clickable" id="cardApiTraffic" data-action="openTrafficReport" title="Click to open detailed API Traffic & Token Report" style="cursor:pointer;">' +
           '<div class="m3-label">API Traffic (Full)</div>' +
           '<div class="m3-value">~' + formatNumber(apiTraffic) + '</div>' +
-          '<div class="m3-sub">9Router cumulative</div>' +
+          '<div class="m3-sub">Cumulative &middot; View Report &rarr;</div>' +
         '</div>' +
       '</div>';
   }
@@ -2310,10 +2353,10 @@ class ConversationManagerProvider {
           '<span class="stat-value">~' + formatNumber(c.estTotalTokens) + '</span>' +
           '<span class="stat-sub">' + formatNumber(c.estInputTokens) + ' in / ' + formatNumber(c.estOutputTokens) + ' out' + thinkingNote + '</span>' +
         '</div>' +
-        '<div class="stat-card">' +
+        '<div class="stat-card clickable" data-action="openTrafficReport" title="Click to open detailed API Traffic & Token Report" style="cursor:pointer;">' +
           '<span class="stat-label">API Traffic (Full)</span>' +
           '<span class="stat-value">~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + '</span>' +
-          '<span class="stat-sub">' + (c.modelMsgs || 0) + ' requests &middot; 9Router full</span>' +
+          '<span class="stat-sub">' + (c.modelMsgs || 0) + ' requests &middot; Cumulative &rarr;</span>' +
         '</div>' +
         '<div class="stat-card">' +
           '<span class="stat-label">Duration</span>' +

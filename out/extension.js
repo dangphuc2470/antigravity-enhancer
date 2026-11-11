@@ -43,6 +43,7 @@ const crypto = __importStar(require("crypto"));
 const externalOpener_1 = require("./externalOpener");
 const conversationManager_1 = require("./conversationManager");
 const conversationTreeProvider_1 = require("./conversationTreeProvider");
+const trafficReportPanel_1 = require("./trafficReportPanel");
 // Unique marker embedded in the patched code
 const PATCH_MARKER = '/* agy-chat-fixed */';
 const LEGACY_MARKER = '/* agy-clipboard-fixed */';
@@ -820,6 +821,8 @@ function activate(context) {
         conversationManager_1.ConversationManagerProvider.createOrShow(context.extensionUri, folder);
     }), vscode.commands.registerCommand('antigravity.refreshConversationTree', async () => {
         await explorerProvider.refresh();
+    }), vscode.commands.registerCommand('antigravity.openTrafficReport', () => {
+        trafficReportPanel_1.TrafficReportPanel.createOrShow(context.extensionUri);
     }));
     // Register external file opener for binaries, office, media, archives
     (0, externalOpener_1.registerExternalOpener)(context);
