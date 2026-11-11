@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import { registerExternalOpener } from './externalOpener';
 import { ConversationManagerProvider } from './conversationManager';
-import { ConversationTreeProvider } from './conversationTreeProvider';
+import { ConversationExplorerViewProvider } from './conversationTreeProvider';
 
 // Unique marker embedded in the patched code
 const PATCH_MARKER = '/* agy-chat-fixed */';
@@ -777,6 +777,14 @@ async function fixChecksumsOnly(): Promise<void> {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+    // Register Conversation Explorer WebviewView Provider in Activity Bar
+    const explorerProvider = new ConversationExplorerViewProvider(context.extensionUri);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(ConversationExplorerViewProvider.viewType, explorerProvider, {
+            webviewOptions: { retainContextWhenHidden: true }
+        })
+    );
+
     context.subscriptions.push(
         vscode.commands.registerCommand('antigravity-enhancer.apply', () => applyFix(false)),
         vscode.commands.registerCommand('antigravity-enhancer.remove', () => removeFix()),
@@ -794,21 +802,12 @@ export function activate(context: vscode.ExtensionContext) {
             ConversationManagerProvider.createOrShow(context.extensionUri, typeof folder === 'string' ? folder : undefined);
         }),
         vscode.commands.registerCommand('antigravity.selectConversationFolder', (folder: string) => {
+            explorerProvider.setSelectedFolder(folder);
             ConversationManagerProvider.createOrShow(context.extensionUri, folder);
         }),
         vscode.commands.registerCommand('antigravity.refreshConversationTree', async () => {
-            if (ConversationManagerProvider.currentInstance) {
-                await ConversationManagerProvider.currentInstance.reload();
-            } else {
-                treeProvider.refresh();
-            }
+            await explorerProvider.refresh();
         })
-    );
-
-    // Register Conversation Explorer Tree Provider in Activity Bar
-    const treeProvider = new ConversationTreeProvider(context.extensionUri);
-    context.subscriptions.push(
-        vscode.window.registerTreeDataProvider('antigravity.conversationExplorer', treeProvider)
     );
 
     // Register external file opener for binaries, office, media, archives

@@ -95,6 +95,7 @@
     "views": {
       "antigravity-conversations": [
         {
+          "type": "webview",
           "id": "antigravity.conversationExplorer",
           "name": "Conversation Explorer"
         }

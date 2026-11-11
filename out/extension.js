@@ -788,23 +788,21 @@ async function fixChecksumsOnly() {
     }
 }
 function activate(context) {
+    // Register Conversation Explorer WebviewView Provider in Activity Bar
+    const explorerProvider = new conversationTreeProvider_1.ConversationExplorerViewProvider(context.extensionUri);
+    context.subscriptions.push(vscode.window.registerWebviewViewProvider(conversationTreeProvider_1.ConversationExplorerViewProvider.viewType, explorerProvider, {
+        webviewOptions: { retainContextWhenHidden: true }
+    }));
     context.subscriptions.push(vscode.commands.registerCommand('antigravity-enhancer.apply', () => applyFix(false)), vscode.commands.registerCommand('antigravity-enhancer.remove', () => removeFix()), vscode.commands.registerCommand('antigravity-enhancer.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('agi-chat-fix.apply', () => applyFix(false)), vscode.commands.registerCommand('agi-chat-fix.remove', () => removeFix()), vscode.commands.registerCommand('agi-chat-fix.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('antigravity-clipboard-fix.apply', () => applyFix(false)), vscode.commands.registerCommand('antigravity-clipboard-fix.remove', () => removeFix()), vscode.commands.registerCommand('antigravity-clipboard-fix.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('antigravity.openConversationManager', (folder) => {
         conversationManager_1.ConversationManagerProvider.createOrShow(context.extensionUri, typeof folder === 'string' ? folder : undefined);
     }), vscode.commands.registerCommand('antigravity-enhancer.openConversationManager', (folder) => {
         conversationManager_1.ConversationManagerProvider.createOrShow(context.extensionUri, typeof folder === 'string' ? folder : undefined);
     }), vscode.commands.registerCommand('antigravity.selectConversationFolder', (folder) => {
+        explorerProvider.setSelectedFolder(folder);
         conversationManager_1.ConversationManagerProvider.createOrShow(context.extensionUri, folder);
     }), vscode.commands.registerCommand('antigravity.refreshConversationTree', async () => {
-        if (conversationManager_1.ConversationManagerProvider.currentInstance) {
-            await conversationManager_1.ConversationManagerProvider.currentInstance.reload();
-        }
-        else {
-            treeProvider.refresh();
-        }
+        await explorerProvider.refresh();
     }));
-    // Register Conversation Explorer Tree Provider in Activity Bar
-    const treeProvider = new conversationTreeProvider_1.ConversationTreeProvider(context.extensionUri);
-    context.subscriptions.push(vscode.window.registerTreeDataProvider('antigravity.conversationExplorer', treeProvider));
     // Register external file opener for binaries, office, media, archives
     (0, externalOpener_1.registerExternalOpener)(context);
     // Auto-load pending cascade on window activation or focus
