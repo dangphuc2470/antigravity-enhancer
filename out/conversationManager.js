@@ -574,20 +574,42 @@ class ConversationManagerProvider {
         return { rootNodes: serializedRoots, currentWorkspacePath: currentWs, currentWorkspaceCount };
     }
     _filterConversations() {
-        let list = [...this._conversations];
         const currentWs = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0])
             ? this._normalizePath(vscode.workspace.workspaceFolders[0].uri.fsPath)
             : '';
+        let folderList = [...this._conversations];
         if (this._selectedFolder === 'CURRENT') {
             if (currentWs) {
                 const curLower = currentWs.toLowerCase();
-                list = list.filter(c => this._matchesFolder(c, curLower, this._includeSubfolders));
+                folderList = folderList.filter(c => this._matchesFolder(c, curLower, this._includeSubfolders));
             }
         }
         else if (this._selectedFolder !== 'ALL') {
             const sel = this._selectedFolder.toLowerCase();
-            list = list.filter(c => this._matchesFolder(c, sel, this._includeSubfolders));
+            folderList = folderList.filter(c => this._matchesFolder(c, sel, this._includeSubfolders));
         }
+        let folderName = 'All Conversations';
+        if (this._selectedFolder === 'CURRENT') {
+            folderName = currentWs ? (currentWs.split('/').filter(Boolean).pop() || 'Current Workspace') : 'Current Workspace';
+        }
+        else if (this._selectedFolder !== 'ALL') {
+            const parts = this._selectedFolder.split('/').filter(Boolean);
+            folderName = parts.length > 0 ? parts[parts.length - 1] : this._selectedFolder;
+        }
+        let folderTotalConversations = folderList.length;
+        let folderTotalMessages = 0;
+        let folderUserMsgs = 0;
+        let folderModelMsgs = 0;
+        let folderTotalTokens = 0;
+        let folderTotalSteps = 0;
+        for (const c of folderList) {
+            folderTotalMessages += (c.userMsgs || 0) + (c.modelMsgs || 0);
+            folderUserMsgs += c.userMsgs || 0;
+            folderModelMsgs += c.modelMsgs || 0;
+            folderTotalTokens += c.estTotalTokens || 0;
+            folderTotalSteps += c.stepCount || 0;
+        }
+        let list = [...folderList];
         const q = this._searchQuery.trim().toLowerCase();
         if (q) {
             list = list.filter(c => {
@@ -634,7 +656,18 @@ class ConversationManagerProvider {
             const { searchableContent, ...rest } = c;
             return { ...rest, matchSnippet };
         });
-        return { items, totalTokens, totalMessages };
+        return {
+            items,
+            totalTokens,
+            totalMessages,
+            folderName,
+            folderTotalConversations,
+            folderTotalMessages,
+            folderUserMsgs,
+            folderModelMsgs,
+            folderTotalTokens,
+            folderTotalSteps
+        };
     }
     _sendState() {
         const treeData = this._buildFolderTree();
@@ -649,6 +682,13 @@ class ConversationManagerProvider {
             conversations: filtered.items,
             filteredTokens: filtered.totalTokens,
             filteredMessages: filtered.totalMessages,
+            folderName: filtered.folderName,
+            folderTotalConversations: filtered.folderTotalConversations,
+            folderTotalMessages: filtered.folderTotalMessages,
+            folderUserMsgs: filtered.folderUserMsgs,
+            folderModelMsgs: filtered.folderModelMsgs,
+            folderTotalTokens: filtered.folderTotalTokens,
+            folderTotalSteps: filtered.folderTotalSteps,
             totalConversations: this._conversations.length,
             selectedId: this._selectedId,
             searchQuery: this._searchQuery,
@@ -666,6 +706,13 @@ class ConversationManagerProvider {
             conversations: filtered.items,
             filteredTokens: filtered.totalTokens,
             filteredMessages: filtered.totalMessages,
+            folderName: filtered.folderName,
+            folderTotalConversations: filtered.folderTotalConversations,
+            folderTotalMessages: filtered.folderTotalMessages,
+            folderUserMsgs: filtered.folderUserMsgs,
+            folderModelMsgs: filtered.folderModelMsgs,
+            folderTotalTokens: filtered.folderTotalTokens,
+            folderTotalSteps: filtered.folderTotalSteps,
             selectedId: this._selectedId
         });
     }
@@ -1097,20 +1144,121 @@ class ConversationManagerProvider {
 
   /* Pane 2: Conversation List */
   .pane-list {
-    width: 370px;
-    min-width: 280px;
+    width: 380px;
+    min-width: 290px;
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
     background: var(--bg);
     flex-shrink: 0;
   }
-  .search-box {
-    padding: 8px 10px;
+
+  /* Folder Overview Panel (Material You inspired, Dark Mode VS Code) */
+  .folder-overview {
+    padding: 10px 12px 10px 12px;
+    background: var(--vscode-sideBar-background, rgba(255, 255, 255, 0.025));
     border-bottom: 1px solid var(--border);
     display: flex;
     flex-direction: column;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .overview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .overview-title {
+    display: flex;
+    align-items: center;
     gap: 6px;
+    min-width: 0;
+    flex: 1;
+  }
+  .overview-title-icon {
+    width: 14px;
+    height: 14px;
+    min-width: 14px;
+    min-height: 14px;
+    aspect-ratio: 1 / 1;
+    flex-shrink: 0;
+    opacity: 0.9;
+  }
+  .overview-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    letter-spacing: -0.1px;
+  }
+  .overview-scope-badge {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1.5px 7px;
+    border-radius: 99px;
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--muted);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    flex-shrink: 0;
+    letter-spacing: 0.2px;
+  }
+  .overview-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+  .m3-stat-card {
+    background: var(--vscode-editor-background, rgba(255, 255, 255, 0.035));
+    border: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.08));
+    border-radius: 10px;
+    padding: 7px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    box-sizing: border-box;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .m3-stat-card:hover {
+    background: rgba(255, 255, 255, 0.055);
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+  .m3-label {
+    font-size: 9.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--muted);
+    opacity: 0.85;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .m3-value {
+    font-size: 16.5px;
+    font-weight: 700;
+    color: var(--fg);
+    line-height: 1.25;
+    letter-spacing: -0.2px;
+  }
+  .m3-sub {
+    font-size: 10px;
+    color: var(--muted);
+    opacity: 0.75;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.2;
+  }
+
+  .search-box {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
     background: var(--sidebar-bg);
     flex-shrink: 0;
   }
@@ -1124,18 +1272,19 @@ class ConversationManagerProvider {
     background: var(--input-bg);
     color: var(--input-fg);
     border: 1px solid var(--input-border);
-    border-radius: 2px;
-    padding: 4px 24px 4px 8px;
-    font-size: 12.5px;
+    border-radius: 8px;
+    padding: 5px 26px 5px 10px;
+    font-size: 12px;
     font-family: inherit;
     outline: none;
+    transition: border-color 0.15s ease;
   }
   .search-input:focus {
     border-color: var(--focus-border);
   }
   .search-clear {
     position: absolute;
-    right: 5px;
+    right: 6px;
     background: transparent;
     border: none;
     color: var(--muted);
@@ -1150,18 +1299,19 @@ class ConversationManagerProvider {
   .filter-chips {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
     font-size: 11px;
   }
   .chip {
-    padding: 2px 7px;
-    border-radius: 2px;
+    padding: 2.5px 9px;
+    border-radius: 99px;
     background: transparent;
     cursor: pointer;
     border: 1px solid var(--border);
     color: var(--muted);
     font-size: 11px;
     user-select: none;
+    transition: all 0.15s ease;
   }
   .chip:hover {
     background: var(--hover-bg);
@@ -1177,14 +1327,14 @@ class ConversationManagerProvider {
     background: var(--vscode-dropdown-background, var(--input-bg));
     color: var(--vscode-dropdown-foreground, var(--input-fg));
     border: 1px solid var(--vscode-dropdown-border, var(--input-border));
-    border-radius: 2px;
+    border-radius: 6px;
     font-size: 11px;
     font-family: inherit;
-    padding: 2px 4px;
+    padding: 2.5px 6px;
     outline: none;
   }
   .list-summary-strip {
-    padding: 4px 10px;
+    padding: 4px 12px;
     font-size: 11px;
     color: var(--muted);
     border-bottom: 1px solid var(--border);
@@ -1196,21 +1346,27 @@ class ConversationManagerProvider {
   .conv-list {
     flex: 1;
     overflow-y: auto;
+    padding: 4px 0;
   }
   .conv-item {
-    padding: 8px 11px;
-    border-bottom: 1px solid var(--border);
+    margin: 2px 6px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    border: 1px solid transparent;
     cursor: pointer;
     display: flex;
     flex-direction: column;
     gap: 3px;
+    transition: background 0.12s ease, border-color 0.12s ease;
   }
   .conv-item:hover {
     background: var(--hover-bg);
+    border-color: rgba(255, 255, 255, 0.05);
   }
   .conv-item.active {
     background: var(--active-bg);
     color: var(--active-fg);
+    border-color: transparent;
   }
   .conv-title {
     font-weight: 500;
@@ -1316,12 +1472,17 @@ class ConversationManagerProvider {
   }
   .stat-card {
     background: var(--sidebar-bg);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 7px 10px;
+    border: 1px solid var(--vscode-widget-border, var(--border));
+    border-radius: 10px;
+    padding: 8px 10px;
     display: flex;
     flex-direction: column;
     gap: 2px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .stat-card:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.13);
   }
   .stat-card .stat-label {
     font-size: 10.5px;
@@ -1510,6 +1671,7 @@ class ConversationManagerProvider {
 
     <!-- Pane 2: Conversation List -->
     <div class="pane-list">
+      <div class="folder-overview" id="folderOverview"></div>
       <div class="search-box">
         <div class="search-input-wrapper">
           <input type="text" id="searchInput" class="search-input" placeholder="Search title or chat content...">
@@ -1528,7 +1690,7 @@ class ConversationManagerProvider {
           </select>
         </div>
       </div>
-      <div class="list-summary-strip" id="listSummaryStrip">
+      <div class="list-summary-strip" id="listSummaryStrip" style="display:none;">
         <span id="summaryCount">0 conversations</span>
         <span id="summaryMetrics">0 msgs / ~0 tok</span>
       </div>
@@ -1550,6 +1712,13 @@ class ConversationManagerProvider {
     conversations: [],
     filteredTokens: 0,
     filteredMessages: 0,
+    folderName: 'All Conversations',
+    folderTotalConversations: 0,
+    folderTotalMessages: 0,
+    folderUserMsgs: 0,
+    folderModelMsgs: 0,
+    folderTotalTokens: 0,
+    folderTotalSteps: 0,
     totalConversations: 0,
     currentWorkspace: '',
     currentWorkspaceCount: 0,
@@ -1711,6 +1880,7 @@ class ConversationManagerProvider {
           }
         }
         renderFolderTree();
+        renderFolderOverview();
         renderConversationList();
         document.getElementById('headerTotalBadge').innerText = String(msg.totalConversations || 0);
         if (!state.selectedId && state.detail) {
@@ -1719,10 +1889,8 @@ class ConversationManagerProvider {
         }
         break;
       case 'conversationList':
-        state.conversations = msg.conversations || [];
-        state.filteredTokens = msg.filteredTokens || 0;
-        state.filteredMessages = msg.filteredMessages || 0;
-        state.selectedId = msg.selectedId;
+        state = { ...state, ...msg };
+        renderFolderOverview();
         renderConversationList();
         if (state.detail) renderDetailPane();
         break;
@@ -1853,9 +2021,84 @@ class ConversationManagerProvider {
     container.innerHTML = html;
   }
 
+  function renderFolderOverview() {
+    const container = document.getElementById('folderOverview');
+    if (!container) return;
+
+    const fName = state.folderName || 'All Conversations';
+    const isSearching = Boolean((state.searchQuery || '').trim());
+    const count = (typeof state.folderTotalConversations === 'number') ? state.folderTotalConversations : state.conversations.length;
+    const msgs = (typeof state.folderTotalMessages === 'number') ? state.folderTotalMessages : (state.filteredMessages || 0);
+    const userMsgs = state.folderUserMsgs || 0;
+    const aiMsgs = state.folderModelMsgs || 0;
+    const tokens = (typeof state.folderTotalTokens === 'number') ? state.folderTotalTokens : (state.filteredTokens || 0);
+    const steps = state.folderTotalSteps || 0;
+
+    let iconSvg = '';
+    if (state.selectedFolder === 'ALL') {
+      iconSvg = '<svg class="overview-title-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 2H2a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1zm-1 10H3V4h10v8zM5 6h6v1H5V6zm0 3h6v1H5V9z"/></svg>';
+    } else if (state.selectedFolder === 'CURRENT') {
+      iconSvg = '<svg class="overview-title-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.251.068a.5.5 0 0 1 .42.58L10.477 6.5H14a.5.5 0 0 1 .372.832l-9.5 10.5a.5.5 0 0 1-.84-.528l1.2-5.804H1.5a.5.5 0 0 1-.372-.832l9.5-10.5a.5.5 0 0 1 .623-.1z"/></svg>';
+    } else if (/^[a-zA-Z]:/.test(state.selectedFolder)) {
+      iconSvg = '<svg class="overview-title-icon drive-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 3H3V4h10v2zm1 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1zm-1 3H3v-2h10v2z"/></svg>';
+    } else {
+      iconSvg = '<svg class="overview-title-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10l-.5-.5zm-.5 11h-12V3h4.29l.85.85.35.15H14v10z"/></svg>';
+    }
+
+    const scopeLabel = state.selectedFolder === 'ALL'
+      ? 'Global'
+      : (state.includeSubfolders ? 'Recursive' : 'Direct folder');
+
+    const convSub = isSearching
+      ? (state.conversations.length + ' matching filter')
+      : (count === 1 ? '1 conversation' : count + ' conversations');
+
+    const msgSub = (userMsgs || aiMsgs)
+      ? (formatNumber(userMsgs) + ' user · ' + formatNumber(aiMsgs) + ' AI')
+      : 'User & Assistant';
+
+    container.innerHTML =
+      '<div class="overview-header">' +
+        '<div class="overview-title" title="' + escapeHtml(state.selectedFolder) + '">' +
+          iconSvg +
+          '<span class="overview-name">' + escapeHtml(fName) + '</span>' +
+        '</div>' +
+        '<span class="overview-scope-badge">' + scopeLabel + '</span>' +
+      '</div>' +
+      '<div class="overview-cards">' +
+        '<div class="m3-stat-card">' +
+          '<div class="m3-label">Conversations</div>' +
+          '<div class="m3-value">' + count + '</div>' +
+          '<div class="m3-sub" title="' + escapeHtml(convSub) + '">' + escapeHtml(convSub) + '</div>' +
+        '</div>' +
+        '<div class="m3-stat-card">' +
+          '<div class="m3-label">Messages</div>' +
+          '<div class="m3-value">' + formatNumber(msgs) + '</div>' +
+          '<div class="m3-sub" title="' + escapeHtml(msgSub) + '">' + escapeHtml(msgSub) + '</div>' +
+        '</div>' +
+        '<div class="m3-stat-card">' +
+          '<div class="m3-label">Est. Tokens</div>' +
+          '<div class="m3-value">~' + formatNumber(tokens) + '</div>' +
+          '<div class="m3-sub">context memory</div>' +
+        '</div>' +
+        '<div class="m3-stat-card">' +
+          '<div class="m3-label">Steps</div>' +
+          '<div class="m3-value">' + formatNumber(steps) + '</div>' +
+          '<div class="m3-sub">indexed turns</div>' +
+        '</div>' +
+      '</div>';
+  }
+
   function renderConversationList() {
-    document.getElementById('summaryCount').innerText = state.conversations.length + ' conversation' + (state.conversations.length === 1 ? '' : 's');
-    document.getElementById('summaryMetrics').innerText = formatNumber(state.filteredMessages) + ' msgs · ~' + formatNumber(state.filteredTokens) + ' tok';
+    const isSearching = Boolean((state.searchQuery || '').trim());
+    const strip = document.getElementById('listSummaryStrip');
+    if (isSearching) {
+      strip.style.display = 'flex';
+      document.getElementById('summaryCount').innerText = state.conversations.length + ' matching filter';
+      document.getElementById('summaryMetrics').innerText = formatNumber(state.filteredMessages) + ' msgs · ~' + formatNumber(state.filteredTokens) + ' tok';
+    } else {
+      strip.style.display = 'none';
+    }
 
     const container = document.getElementById('convList');
     if (state.conversations.length === 0) {
