@@ -432,10 +432,11 @@ export class ConversationBackupService {
                 }
 
                 let importedCount = 0;
+                let updatedCount = 0;
                 let skippedDuplicates = 0;
                 let processed = 0;
 
-                // Strict deduplication & restoration
+                // Smart deduplication & restoration
                 for (const [cid, meta] of metadataMap.entries()) {
                     processed++;
                     progress.report({
@@ -443,36 +444,63 @@ export class ConversationBackupService {
                         increment: (1 / (totalCandidates + 1)) * 75
                     });
 
+                    const files = convFileMap.get(cid);
+                    if (!files || (!files.transcript && !files.transcriptFull)) {
+                        continue;
+                    }
+
                     const localTargetDir = path.join(brainDir, cid, '.system_generated', 'logs');
                     const localTranscript = path.join(localTargetDir, 'transcript.jsonl');
                     const localTranscriptFull = path.join(localTargetDir, 'transcript_full.jsonl');
 
                     const existsOnDisk = fs.existsSync(localTranscript);
                     let localHasData = false;
+                    let localSize = 0;
                     if (existsOnDisk) {
                         try {
                             const st = fs.statSync(localTranscript);
-                            if (st.size > 0) {
+                            localSize = st.size;
+                            if (localSize > 0) {
                                 localHasData = true;
                             }
                         } catch {}
                     }
 
-                    // Deduplication check:
-                    // If local transcript exists with non-empty content, SKIP to protect active local conversations!
+                    let isUpdate = false;
                     if (localHasData) {
-                        skippedDuplicates++;
-                        // If local cache is missing metadata for this conversation, backfill it without overwriting
-                        if (!currentCacheMap.has(cid)) {
-                            currentCacheMap.set(cid, meta);
-                        }
-                        continue;
-                    }
+                        // Compare transcript length between local and backup
+                        const backupData = files.transcript || files.transcriptFull;
+                        if (backupData) {
+                            try {
+                                const localContent = fs.readFileSync(localTranscript, 'utf8');
+                                const backupContent = backupData.toString('utf8');
 
-                    // New or missing conversation -> Extract and restore
-                    const files = convFileMap.get(cid);
-                    if (!files || (!files.transcript && !files.transcriptFull)) {
-                        continue;
+                                const countLines = (str: string) => {
+                                    let c = 0;
+                                    for (let i = 0; i < str.length; i++) {
+                                        if (str.charCodeAt(i) === 10) c++;
+                                    }
+                                    return c;
+                                };
+
+                                const localLines = countLines(localContent);
+                                const backupLines = countLines(backupContent);
+
+                                if (backupLines > localLines || (backupLines === localLines && backupData.length > localSize)) {
+                                    // Backup version has more messages/steps -> update to the longer version
+                                    isUpdate = true;
+                                }
+                            } catch {}
+                        }
+
+                        if (!isUpdate) {
+                            // Local version is equal or longer -> preserve local version
+                            skippedDuplicates++;
+                            if (!currentCacheMap.has(cid)) {
+                                currentCacheMap.set(cid, meta);
+                            }
+                            continue;
+                        }
                     }
 
                     try {
@@ -488,7 +516,11 @@ export class ConversationBackupService {
                         }
 
                         currentCacheMap.set(cid, meta);
-                        importedCount++;
+                        if (isUpdate) {
+                            updatedCount++;
+                        } else {
+                            importedCount++;
+                        }
                     } catch (err: any) {
                         console.error(`Failed to write conversation ${cid}:`, err);
                     }
@@ -508,9 +540,13 @@ export class ConversationBackupService {
                     vscode.commands.executeCommand('antigravity.refreshConversationTree');
                 } catch {}
 
-                vscode.window.showInformationMessage(
-                    `Import completed: ${importedCount} new conversation(s) restored, ${skippedDuplicates} duplicate(s) skipped.`
-                );
+                let summaryMsg = `Import completed: ${importedCount} new conversation(s) restored`;
+                if (updatedCount > 0) {
+                    summaryMsg += `, ${updatedCount} updated with longer history`;
+                }
+                summaryMsg += `, ${skippedDuplicates} duplicate(s) kept local.`;
+
+                vscode.window.showInformationMessage(summaryMsg);
             }
         );
     }
