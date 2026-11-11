@@ -171,6 +171,11 @@ class ConversationManagerProvider {
                 case 'sync':
                     await ConversationManagerProvider.syncConversations();
                     break;
+                case 'syncSingleConversation':
+                    if (typeof message.id === 'string') {
+                        await ConversationManagerProvider.syncSingleConversation(message.id);
+                    }
+                    break;
             }
         }, null, this._disposables);
         this._loadConversations();
@@ -501,6 +506,151 @@ class ConversationManagerProvider {
         }
         vscode.window.showInformationMessage(`Sync complete: ${stats.syncedToApp} copied to App, ${stats.syncedToIde} copied to IDE, ${stats.updated} updated.`);
         return stats;
+    }
+    static async syncSingleConversation(id) {
+        try {
+            const ideBase = path.join(os.homedir(), '.gemini', 'antigravity-ide');
+            const appBase = path.join(os.homedir(), '.gemini', 'antigravity');
+            const ideBrain = path.join(ideBase, 'brain', id);
+            const appBrain = path.join(appBase, 'brain', id);
+            const ideConvDir = path.join(ideBase, 'conversations');
+            const appConvDir = path.join(appBase, 'conversations');
+            const hasIdeBrain = fs.existsSync(ideBrain);
+            const hasAppBrain = fs.existsSync(appBrain);
+            const hasIdeDb = fs.existsSync(path.join(ideConvDir, `${id}.db`));
+            const hasAppDb = fs.existsSync(path.join(appConvDir, `${id}.db`));
+            if (!hasIdeBrain && !hasIdeDb && !hasAppBrain && !hasAppDb) {
+                vscode.window.showWarningMessage(`No conversation data found on disk for ${id}.`);
+                return false;
+            }
+            // Sync from IDE to App if missing in App
+            if ((hasIdeBrain || hasIdeDb) && !hasAppBrain && !hasAppDb) {
+                if (hasIdeBrain) {
+                    if (!fs.existsSync(path.dirname(appBrain)))
+                        fs.mkdirSync(path.dirname(appBrain), { recursive: true });
+                    fs.cpSync(ideBrain, appBrain, { recursive: true });
+                }
+                if (hasIdeDb) {
+                    if (!fs.existsSync(appConvDir))
+                        fs.mkdirSync(appConvDir, { recursive: true });
+                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
+                        const sf = path.join(ideConvDir, `${id}${ext}`);
+                        const df = path.join(appConvDir, `${id}${ext}`);
+                        if (fs.existsSync(sf)) {
+                            try {
+                                fs.copyFileSync(sf, df);
+                            }
+                            catch { }
+                        }
+                    }
+                }
+            }
+            else if ((hasAppBrain || hasAppDb) && !hasIdeBrain && !hasIdeDb) {
+                // Sync from App to IDE if missing in IDE
+                if (hasAppBrain) {
+                    if (!fs.existsSync(path.dirname(ideBrain)))
+                        fs.mkdirSync(path.dirname(ideBrain), { recursive: true });
+                    fs.cpSync(appBrain, ideBrain, { recursive: true });
+                }
+                if (hasAppDb) {
+                    if (!fs.existsSync(ideConvDir))
+                        fs.mkdirSync(ideConvDir, { recursive: true });
+                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
+                        const sf = path.join(appConvDir, `${id}${ext}`);
+                        const df = path.join(ideConvDir, `${id}${ext}`);
+                        if (fs.existsSync(sf)) {
+                            try {
+                                fs.copyFileSync(sf, df);
+                            }
+                            catch { }
+                        }
+                    }
+                }
+            }
+            else {
+                // Both exist: check and update transcript
+                const ideLog = path.join(ideBrain, '.system_generated', 'logs', 'transcript.jsonl');
+                const appLog = path.join(appBrain, '.system_generated', 'logs', 'transcript.jsonl');
+                const ideLogFull = path.join(ideBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
+                const appLogFull = path.join(appBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
+                if (fs.existsSync(ideLog) && fs.existsSync(appLog)) {
+                    try {
+                        const ideSize = fs.statSync(ideLog).size;
+                        const appSize = fs.statSync(appLog).size;
+                        if (ideSize > appSize + 32) {
+                            fs.copyFileSync(ideLog, appLog);
+                            if (fs.existsSync(ideLogFull))
+                                fs.copyFileSync(ideLogFull, appLogFull);
+                        }
+                        else if (appSize > ideSize + 32) {
+                            fs.copyFileSync(appLog, ideLog);
+                            if (fs.existsSync(appLogFull))
+                                fs.copyFileSync(appLogFull, ideLogFull);
+                        }
+                    }
+                    catch { }
+                }
+                else if (fs.existsSync(ideLog) && !fs.existsSync(appLog)) {
+                    const logDir = path.dirname(appLog);
+                    if (!fs.existsSync(logDir))
+                        fs.mkdirSync(logDir, { recursive: true });
+                    fs.copyFileSync(ideLog, appLog);
+                    if (fs.existsSync(ideLogFull))
+                        fs.copyFileSync(ideLogFull, appLogFull);
+                }
+                else if (!fs.existsSync(ideLog) && fs.existsSync(appLog)) {
+                    const logDir = path.dirname(ideLog);
+                    if (!fs.existsSync(logDir))
+                        fs.mkdirSync(logDir, { recursive: true });
+                    fs.copyFileSync(appLog, ideLog);
+                    if (fs.existsSync(appLogFull))
+                        fs.copyFileSync(appLogFull, ideLogFull);
+                }
+                // Copy missing DB files
+                if (hasIdeDb && !hasAppDb) {
+                    if (!fs.existsSync(appConvDir))
+                        fs.mkdirSync(appConvDir, { recursive: true });
+                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
+                        const sf = path.join(ideConvDir, `${id}${ext}`);
+                        const df = path.join(appConvDir, `${id}${ext}`);
+                        if (fs.existsSync(sf))
+                            try {
+                                fs.copyFileSync(sf, df);
+                            }
+                            catch { }
+                    }
+                }
+                else if (!hasIdeDb && hasAppDb) {
+                    if (!fs.existsSync(ideConvDir))
+                        fs.mkdirSync(ideConvDir, { recursive: true });
+                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
+                        const sf = path.join(appConvDir, `${id}${ext}`);
+                        const df = path.join(ideConvDir, `${id}${ext}`);
+                        if (fs.existsSync(sf))
+                            try {
+                                fs.copyFileSync(sf, df);
+                            }
+                            catch { }
+                    }
+                }
+            }
+            // Reload conversations and refresh detail
+            if (ConversationManagerProvider.currentInstance) {
+                const target = ConversationManagerProvider.currentInstance._conversations.find(c => c.id === id);
+                if (target) {
+                    target.source = 'both';
+                }
+                await ConversationManagerProvider.currentInstance._loadConversations();
+                await ConversationManagerProvider.currentInstance._sendDetail(id);
+                ConversationManagerProvider.currentInstance._sendState();
+            }
+            vscode.window.showInformationMessage(`Conversation ${id.slice(0, 8)}... synced between IDE and App.`);
+            return true;
+        }
+        catch (e) {
+            vscode.window.showErrorMessage(`Failed to sync conversation: ${e?.message || String(e)}`);
+            return false;
+        }
     }
     static readDiskCache() {
         const list = [];
@@ -2002,11 +2152,14 @@ class ConversationManagerProvider {
     flex-direction: column;
     gap: 2px;
     box-sizing: border-box;
+  }
+  .m3-stat-card.clickable {
+    cursor: pointer;
     transition: background 0.15s ease, border-color 0.15s ease;
   }
-  .m3-stat-card:hover {
-    background: rgba(255, 255, 255, 0.055);
-    border-color: rgba(255, 255, 255, 0.14);
+  .m3-stat-card.clickable:hover {
+    background: rgba(255, 255, 255, 0.065);
+    border-color: rgba(255, 255, 255, 0.16);
   }
   .m3-label {
     font-size: 9.5px;
@@ -2293,11 +2446,6 @@ class ConversationManagerProvider {
     font-size: 11px;
     color: var(--muted);
     user-select: none;
-    transition: background 0.15s ease, border-color 0.15s ease;
-  }
-  .m3-chip:hover {
-    background: rgba(255, 255, 255, 0.07);
-    border-color: rgba(255, 255, 255, 0.15);
   }
   .m3-chip b {
     color: var(--fg);
@@ -2311,6 +2459,7 @@ class ConversationManagerProvider {
   }
   .meta-link:hover {
     text-decoration: underline;
+    color: #93c5fd;
   }
 
   /* Search match bar inside detail */
@@ -2349,10 +2498,6 @@ class ConversationManagerProvider {
     line-height: 1.6;
     border: 1px solid rgba(255, 255, 255, 0.08);
     background: rgba(255, 255, 255, 0.03);
-    transition: border-color 0.15s ease;
-  }
-  .msg-bubble:hover {
-    border-color: rgba(255, 255, 255, 0.14);
   }
   .msg-bubble.user {
     background: linear-gradient(180deg, rgba(59, 130, 246, 0.07) 0%, rgba(59, 130, 246, 0.03) 100%);
@@ -2807,6 +2952,10 @@ class ConversationManagerProvider {
         '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M12.854.146a.5.5 0 0 0-.707 0L10.5 1.793 14.207 5.5l1.647-1.646a.5.5 0 0 0 0-.708l-3-3zm.646 6.061L9.793 2.5 3.293 9H3.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.207l6.5-6.5zm-7.468 7.468A.5.5 0 0 1 6 13.5V13h-.5a.5.5 0 0 1-.5-.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.5-.5V10h-.5a.499.499 0 0 1-.175-.032l-.179.178a.5.5 0 0 0-.11.168l-2 5a.5.5 0 0 0 .65.65l5-2a.5.5 0 0 0 .168-.11l.178-.178z"/></svg>' +
         '<span>Rename...</span>' +
       '</div>' +
+      '<div class="context-menu-item" data-action="syncSingle" data-id="' + escapeHtml(c.id) + '">' +
+        '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-7.068 2H.534a.25.25 0 0 1-.192-.41l1.966-2.36a.25.25 0 0 1 .384 0l1.966 2.36a.25.25 0 0 1-.192.41z"/><path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 4.9 4c1.552 0 2.94-.707 3.857-1.818a.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/></svg>' +
+        '<span>Sync (IDE &lt;-&gt; App)</span>' +
+      '</div>' +
       '<div class="context-menu-separator"></div>' +
       '<div class="context-menu-item danger" data-action="delete" data-id="' + escapeHtml(c.id) + '">' +
         '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg>' +
@@ -2845,6 +2994,8 @@ class ConversationManagerProvider {
       vscode.postMessage({ type: 'openTranscriptLog', id });
     } else if (action === 'exportMd' && id) {
       vscode.postMessage({ type: 'exportMd', id });
+    } else if (action === 'syncSingle' && id) {
+      vscode.postMessage({ type: 'syncSingleConversation', id });
     } else if (action === 'rename' && id) {
       const title = item.getAttribute('data-title') || '';
       vscode.postMessage({ type: 'requestRename', id, oldTitle: title });
@@ -2894,6 +3045,8 @@ class ConversationManagerProvider {
       vscode.postMessage({ type: 'openInChat', id });
     } else if (action === 'openTranscriptLog' && id) {
       vscode.postMessage({ type: 'openTranscriptLog', id });
+    } else if (action === 'syncSingleConversation' && id) {
+      vscode.postMessage({ type: 'syncSingleConversation', id });
     } else if (action === 'rename' && id) {
       const title = btn.getAttribute('data-title') || '';
       vscode.postMessage({ type: 'requestRename', id, oldTitle: title });
@@ -2922,26 +3075,6 @@ class ConversationManagerProvider {
     const btn = ev.target.closest('[data-action="openTrafficReport"]');
     if (btn) {
       vscode.postMessage({ type: 'openTrafficReport' });
-      return;
-    }
-    const bSync = ev.target.closest('#btnSync');
-    if (bSync) {
-      vscode.postMessage({ type: 'sync' });
-      return;
-    }
-    const bExport = ev.target.closest('#btnExport') || ev.target.closest('#btnBackup');
-    if (bExport) {
-      vscode.postMessage({ type: 'export' });
-      return;
-    }
-    const bImport = ev.target.closest('#btnImport');
-    if (bImport) {
-      vscode.postMessage({ type: 'import' });
-      return;
-    }
-    const bRefresh = ev.target.closest('#btnRefreshOverview');
-    if (bRefresh) {
-      vscode.postMessage({ type: 'refresh' });
       return;
     }
   });
@@ -3092,13 +3225,7 @@ class ConversationManagerProvider {
           iconSvg +
           '<span class="overview-name">' + escapeHtml(fName) + '</span>' +
         '</div>' +
-        '<div style="display:flex;align-items:center;gap:5px;">' +
-          '<span class="overview-scope-badge">' + scopeLabel + '</span>' +
-          '<button class="btn-mini" id="btnSync" title="Sync all conversations between IDE and Standalone App" style="padding:1.5px 6px;font-size:10.5px;">Sync</button>' +
-          '<button class="btn-mini" id="btnImport" title="Import conversations from .zip archive (deduplicates existing)" style="padding:1.5px 6px;font-size:10.5px;">Import</button>' +
-          '<button class="btn-mini" id="btnExport" title="Export all conversations to .zip archive" style="padding:1.5px 6px;font-size:10.5px;">Export</button>' +
-          '<button class="btn-mini" id="btnRefreshOverview" title="Refresh conversations" style="padding:1.5px 6px;font-size:10.5px;">Refresh</button>' +
-        '</div>' +
+        '<span class="overview-scope-badge">' + scopeLabel + '</span>' +
       '</div>' +
       '<div class="overview-cards">' +
         '<div class="m3-stat-card">' +
@@ -3244,6 +3371,7 @@ class ConversationManagerProvider {
         '<div class="detail-title" title="' + escapeHtml(c.title) + '">' + escapeHtml(c.title) + '</div>' +
         '<div class="detail-actions">' +
           '<button class="btn-primary" data-action="openInChat" data-id="' + escapeHtml(c.id) + '">Open in Chat</button>' +
+          '<button class="btn-secondary" data-action="syncSingleConversation" data-id="' + escapeHtml(c.id) + '" title="Sync this conversation between IDE and App (~/.gemini/antigravity)">Sync</button>' +
           '<button class="btn-secondary" data-action="openFind" title="Find in conversation (Ctrl+F)">Find</button>' +
           '<button class="btn-secondary" data-action="openTranscriptLog" data-id="' + escapeHtml(c.id) + '">View Log</button>' +
         '</div>' +
