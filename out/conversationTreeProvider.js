@@ -119,6 +119,11 @@ class ConversationExplorerViewProvider {
                     await ConversationBackupService.importConversations();
                     break;
                 }
+                case 'sync': {
+                    await conversationManager_1.ConversationManagerProvider.syncConversations();
+                    await this.refresh();
+                    break;
+                }
                 case 'moveFolder':
                     await this._moveFolderConversations(message.folder);
                     break;

@@ -104,6 +104,12 @@
         "category": "Antigravity Enhancer",
         "title": "Export Conversations (.zip) (Alias)",
         "icon": "$(export)"
+      },
+      {
+        "command": "antigravity.syncConversations",
+        "category": "Antigravity Enhancer",
+        "title": "Sync Conversations (IDE <-> App)",
+        "icon": "$(sync)"
       }
     ],
     "viewsContainers": {

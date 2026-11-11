@@ -849,6 +849,9 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('antigravity.importConversations', async () => {
             const { ConversationBackupService } = require('./conversationBackup');
             await ConversationBackupService.importConversations();
+        }),
+        vscode.commands.registerCommand('antigravity.syncConversations', async () => {
+            await ConversationManagerProvider.syncConversations();
         })
     );
 

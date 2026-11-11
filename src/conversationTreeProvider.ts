@@ -102,6 +102,11 @@ export class ConversationExplorerViewProvider implements vscode.WebviewViewProvi
                     await ConversationBackupService.importConversations();
                     break;
                 }
+                case 'sync': {
+                    await ConversationManagerProvider.syncConversations();
+                    await this.refresh();
+                    break;
+                }
                 case 'moveFolder':
                     await this._moveFolderConversations(message.folder);
                     break;

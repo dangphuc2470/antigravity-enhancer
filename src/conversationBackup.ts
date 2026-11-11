@@ -258,12 +258,13 @@ export class ConversationBackupService {
                         increment: (1 / (conversations.length + 1)) * 90
                     });
 
-                    const logDir = path.join(brainDir, c.id, '.system_generated', 'logs');
-                    const transcriptPath = path.join(logDir, 'transcript.jsonl');
-                    const transcriptFullPath = path.join(logDir, 'transcript_full.jsonl');
+                    const tInfo = ConversationManagerProvider.getTranscriptPath(c.id, false);
+                    const tFullInfo = ConversationManagerProvider.getTranscriptPath(c.id, true);
+                    const transcriptPath = tInfo?.path;
+                    const transcriptFullPath = (tFullInfo?.path && tFullInfo.path.endsWith('transcript_full.jsonl')) ? tFullInfo.path : null;
 
                     let hasData = false;
-                    if (fs.existsSync(transcriptPath)) {
+                    if (transcriptPath && fs.existsSync(transcriptPath)) {
                         try {
                             const data = fs.readFileSync(transcriptPath);
                             entries.push({
@@ -274,7 +275,7 @@ export class ConversationBackupService {
                         } catch {}
                     }
 
-                    if (fs.existsSync(transcriptFullPath)) {
+                    if (transcriptFullPath && fs.existsSync(transcriptFullPath)) {
                         try {
                             const data = fs.readFileSync(transcriptFullPath);
                             entries.push({

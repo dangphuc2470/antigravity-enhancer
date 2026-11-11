@@ -168,6 +168,9 @@ class ConversationManagerProvider {
                 case 'forkConversation':
                     await this._forkConversation(message.id, message.stepIndex);
                     break;
+                case 'sync':
+                    await ConversationManagerProvider.syncConversations();
+                    break;
             }
         }, null, this._disposables);
         this._loadConversations();
@@ -249,12 +252,262 @@ class ConversationManagerProvider {
     _normalizePath(uriOrPath) {
         return ConversationManagerProvider.normalizePath(uriOrPath);
     }
+    static getTranscriptPath(id, preferFull = false) {
+        const ideBase = path.join(os.homedir(), '.gemini', 'antigravity-ide');
+        const appBase = path.join(os.homedir(), '.gemini', 'antigravity');
+        const ideFull = path.join(ideBase, 'brain', id, '.system_generated', 'logs', 'transcript_full.jsonl');
+        const ideRegular = path.join(ideBase, 'brain', id, '.system_generated', 'logs', 'transcript.jsonl');
+        const appFull = path.join(appBase, 'brain', id, '.system_generated', 'logs', 'transcript_full.jsonl');
+        const appRegular = path.join(appBase, 'brain', id, '.system_generated', 'logs', 'transcript.jsonl');
+        let ideFile = null;
+        if (preferFull && fs.existsSync(ideFull))
+            ideFile = ideFull;
+        else if (fs.existsSync(ideRegular))
+            ideFile = ideRegular;
+        else if (fs.existsSync(ideFull))
+            ideFile = ideFull;
+        let appFile = null;
+        if (preferFull && fs.existsSync(appFull))
+            appFile = appFull;
+        else if (fs.existsSync(appRegular))
+            appFile = appRegular;
+        else if (fs.existsSync(appFull))
+            appFile = appFull;
+        if (ideFile && appFile) {
+            try {
+                const ideStat = fs.statSync(ideFile);
+                const appStat = fs.statSync(appFile);
+                if (appStat.size > ideStat.size) {
+                    return { path: appFile, source: 'app' };
+                }
+            }
+            catch { }
+            return { path: ideFile, source: 'ide' };
+        }
+        else if (ideFile) {
+            return { path: ideFile, source: 'ide' };
+        }
+        else if (appFile) {
+            return { path: appFile, source: 'app' };
+        }
+        return null;
+    }
+    static detectConversationSource(id) {
+        const ideBase = path.join(os.homedir(), '.gemini', 'antigravity-ide');
+        const appBase = path.join(os.homedir(), '.gemini', 'antigravity');
+        const inIde = fs.existsSync(path.join(ideBase, 'brain', id)) ||
+            fs.existsSync(path.join(ideBase, 'conversations', `${id}.db`));
+        const inApp = fs.existsSync(path.join(appBase, 'brain', id)) ||
+            fs.existsSync(path.join(appBase, 'conversations', `${id}.db`));
+        if (inIde && inApp)
+            return 'both';
+        if (inApp)
+            return 'app';
+        return 'ide';
+    }
+    static async syncConversations() {
+        const ideBase = path.join(os.homedir(), '.gemini', 'antigravity-ide');
+        const appBase = path.join(os.homedir(), '.gemini', 'antigravity');
+        const ideBrain = path.join(ideBase, 'brain');
+        const appBrain = path.join(appBase, 'brain');
+        const ideConv = path.join(ideBase, 'conversations');
+        const appConv = path.join(appBase, 'conversations');
+        if (!fs.existsSync(ideBrain))
+            fs.mkdirSync(ideBrain, { recursive: true });
+        if (!fs.existsSync(appBrain))
+            fs.mkdirSync(appBrain, { recursive: true });
+        if (!fs.existsSync(ideConv))
+            fs.mkdirSync(ideConv, { recursive: true });
+        if (!fs.existsSync(appConv))
+            fs.mkdirSync(appConv, { recursive: true });
+        const allIds = new Set();
+        // Collect IDs from IDE
+        if (fs.existsSync(ideBrain)) {
+            for (const f of fs.readdirSync(ideBrain)) {
+                if (f !== 'tempmediaStorage' && !f.startsWith('.'))
+                    allIds.add(f);
+            }
+        }
+        if (fs.existsSync(ideConv)) {
+            for (const f of fs.readdirSync(ideConv)) {
+                if (f.endsWith('.db'))
+                    allIds.add(f.replace('.db', ''));
+            }
+        }
+        // Collect IDs from App
+        if (fs.existsSync(appBrain)) {
+            for (const f of fs.readdirSync(appBrain)) {
+                if (f !== 'tempmediaStorage' && !f.startsWith('.'))
+                    allIds.add(f);
+            }
+        }
+        if (fs.existsSync(appConv)) {
+            for (const f of fs.readdirSync(appConv)) {
+                if (f.endsWith('.db'))
+                    allIds.add(f.replace('.db', ''));
+            }
+        }
+        const stats = { syncedToIde: 0, syncedToApp: 0, updated: 0 };
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: 'Syncing conversations between IDE and Standalone App...',
+            cancellable: false
+        }, async (progress) => {
+            const idList = Array.from(allIds);
+            let processed = 0;
+            for (const id of idList) {
+                processed++;
+                progress.report({
+                    message: `Checking ${processed}/${idList.length}: ${id.slice(0, 8)}...`,
+                    increment: (1 / (idList.length || 1)) * 100
+                });
+                const srcIdeBrain = path.join(ideBrain, id);
+                const srcAppBrain = path.join(appBrain, id);
+                const hasIdeBrain = fs.existsSync(srcIdeBrain);
+                const hasAppBrain = fs.existsSync(srcAppBrain);
+                const srcIdeDb = path.join(ideConv, `${id}.db`);
+                const srcAppDb = path.join(appConv, `${id}.db`);
+                const hasIdeDb = fs.existsSync(srcIdeDb);
+                const hasAppDb = fs.existsSync(srcAppDb);
+                // Case 1: In IDE only -> copy to App
+                if ((hasIdeBrain || hasIdeDb) && !hasAppBrain && !hasAppDb) {
+                    if (hasIdeBrain) {
+                        try {
+                            fs.cpSync(srcIdeBrain, srcAppBrain, { recursive: true });
+                        }
+                        catch { }
+                    }
+                    if (hasIdeDb) {
+                        for (const ext of ['.db', '.db-shm', '.db-wal']) {
+                            const sf = path.join(ideConv, `${id}${ext}`);
+                            const df = path.join(appConv, `${id}${ext}`);
+                            if (fs.existsSync(sf)) {
+                                try {
+                                    fs.copyFileSync(sf, df);
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    stats.syncedToApp++;
+                    continue;
+                }
+                // Case 2: In App only -> copy to IDE
+                if ((hasAppBrain || hasAppDb) && !hasIdeBrain && !hasIdeDb) {
+                    if (hasAppBrain) {
+                        try {
+                            fs.cpSync(srcAppBrain, srcIdeBrain, { recursive: true });
+                        }
+                        catch { }
+                    }
+                    if (hasAppDb) {
+                        for (const ext of ['.db', '.db-shm', '.db-wal']) {
+                            const sf = path.join(appConv, `${id}${ext}`);
+                            const df = path.join(ideConv, `${id}${ext}`);
+                            if (fs.existsSync(sf)) {
+                                try {
+                                    fs.copyFileSync(sf, df);
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    stats.syncedToIde++;
+                    continue;
+                }
+                // Case 3: Both exist -> compare and update
+                let updated = false;
+                const ideLog = path.join(srcIdeBrain, '.system_generated', 'logs', 'transcript.jsonl');
+                const appLog = path.join(srcAppBrain, '.system_generated', 'logs', 'transcript.jsonl');
+                const ideLogFull = path.join(srcIdeBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
+                const appLogFull = path.join(srcAppBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
+                if (fs.existsSync(ideLog) && fs.existsSync(appLog)) {
+                    try {
+                        const ideSize = fs.statSync(ideLog).size;
+                        const appSize = fs.statSync(appLog).size;
+                        if (ideSize > appSize + 32) {
+                            fs.copyFileSync(ideLog, appLog);
+                            if (fs.existsSync(ideLogFull))
+                                fs.copyFileSync(ideLogFull, appLogFull);
+                            updated = true;
+                        }
+                        else if (appSize > ideSize + 32) {
+                            fs.copyFileSync(appLog, ideLog);
+                            if (fs.existsSync(appLogFull))
+                                fs.copyFileSync(appLogFull, ideLogFull);
+                            updated = true;
+                        }
+                    }
+                    catch { }
+                }
+                else if (fs.existsSync(ideLog) && !fs.existsSync(appLog)) {
+                    const logDir = path.dirname(appLog);
+                    if (!fs.existsSync(logDir))
+                        fs.mkdirSync(logDir, { recursive: true });
+                    try {
+                        fs.copyFileSync(ideLog, appLog);
+                        if (fs.existsSync(ideLogFull))
+                            fs.copyFileSync(ideLogFull, appLogFull);
+                        updated = true;
+                    }
+                    catch { }
+                }
+                else if (!fs.existsSync(ideLog) && fs.existsSync(appLog)) {
+                    const logDir = path.dirname(ideLog);
+                    if (!fs.existsSync(logDir))
+                        fs.mkdirSync(logDir, { recursive: true });
+                    try {
+                        fs.copyFileSync(appLog, ideLog);
+                        if (fs.existsSync(appLogFull))
+                            fs.copyFileSync(appLogFull, ideLogFull);
+                        updated = true;
+                    }
+                    catch { }
+                }
+                // Copy missing DB files
+                if (hasIdeDb && !hasAppDb) {
+                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
+                        const sf = path.join(ideConv, `${id}${ext}`);
+                        const df = path.join(appConv, `${id}${ext}`);
+                        if (fs.existsSync(sf)) {
+                            try {
+                                fs.copyFileSync(sf, df);
+                            }
+                            catch { }
+                        }
+                    }
+                    updated = true;
+                }
+                else if (!hasIdeDb && hasAppDb) {
+                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
+                        const sf = path.join(appConv, `${id}${ext}`);
+                        const df = path.join(ideConv, `${id}${ext}`);
+                        if (fs.existsSync(sf)) {
+                            try {
+                                fs.copyFileSync(sf, df);
+                            }
+                            catch { }
+                        }
+                    }
+                    updated = true;
+                }
+                if (updated)
+                    stats.updated++;
+            }
+        });
+        if (ConversationManagerProvider.currentInstance) {
+            await ConversationManagerProvider.currentInstance._loadConversations();
+            ConversationManagerProvider.currentInstance._sendState();
+        }
+        vscode.window.showInformationMessage(`Sync complete: ${stats.syncedToApp} copied to App, ${stats.syncedToIde} copied to IDE, ${stats.updated} updated.`);
+        return stats;
+    }
     static readDiskCache() {
         const list = [];
         try {
             if (fs.existsSync(ConversationManagerProvider.CACHE_FILE)) {
                 const raw = JSON.parse(fs.readFileSync(ConversationManagerProvider.CACHE_FILE, 'utf8'));
-                if (raw && !Array.isArray(raw) && (raw.version === 6 || raw.version === ConversationManagerProvider.CACHE_VERSION) && Array.isArray(raw.items)) {
+                if (raw && !Array.isArray(raw) && (raw.version === 7 || raw.version === ConversationManagerProvider.CACHE_VERSION) && Array.isArray(raw.items)) {
                     for (const item of raw.items) {
                         if (item && item.id) {
                             if (Array.isArray(item.workspaces)) {
@@ -264,6 +517,9 @@ class ConversationManagerProvider {
                                 item.workspaces = [];
                             }
                             item.isOrphaned = item.workspaces.length > 0 && !fs.existsSync(item.workspaces[0]);
+                            if (!item.source) {
+                                item.source = ConversationManagerProvider.detectConversationSource(item.id);
+                            }
                             list.push(item);
                         }
                     }
@@ -310,9 +566,12 @@ class ConversationManagerProvider {
     }
     async _loadConversations() {
         try {
-            const baseDir = path.join(os.homedir(), '.gemini', 'antigravity-ide');
-            const convDir = path.join(baseDir, 'conversations');
-            const brainDir = path.join(baseDir, 'brain');
+            const ideBaseDir = path.join(os.homedir(), '.gemini', 'antigravity-ide');
+            const ideConvDir = path.join(ideBaseDir, 'conversations');
+            const ideBrainDir = path.join(ideBaseDir, 'brain');
+            const appBaseDir = path.join(os.homedir(), '.gemini', 'antigravity');
+            const appConvDir = path.join(appBaseDir, 'conversations');
+            const appBrainDir = path.join(appBaseDir, 'brain');
             const legacyConvDir = path.join(os.homedir(), '.gemini', 'conversations');
             const summariesMap = new Map();
             // Live bridge lookup for summaries and workspaces
@@ -325,19 +584,35 @@ class ConversationManagerProvider {
                 }
             }
             catch { }
-            const dbFiles = fs.existsSync(convDir)
-                ? fs.readdirSync(convDir).filter(f => f.endsWith('.db'))
-                : [];
-            const idSet = new Set(dbFiles.map(f => f.replace('.db', '')));
+            const idSet = new Set();
+            // Collect IDs from IDE
+            if (fs.existsSync(ideConvDir)) {
+                for (const f of fs.readdirSync(ideConvDir)) {
+                    if (f.endsWith('.db'))
+                        idSet.add(f.replace('.db', ''));
+                }
+            }
+            if (fs.existsSync(ideBrainDir)) {
+                for (const f of fs.readdirSync(ideBrainDir)) {
+                    if (f !== 'tempmediaStorage' && !f.startsWith('.'))
+                        idSet.add(f);
+                }
+            }
+            // Collect IDs from App
+            if (fs.existsSync(appConvDir)) {
+                for (const f of fs.readdirSync(appConvDir)) {
+                    if (f.endsWith('.db'))
+                        idSet.add(f.replace('.db', ''));
+                }
+            }
+            if (fs.existsSync(appBrainDir)) {
+                for (const f of fs.readdirSync(appBrainDir)) {
+                    if (f !== 'tempmediaStorage' && !f.startsWith('.'))
+                        idSet.add(f);
+                }
+            }
             for (const key of summariesMap.keys()) {
                 idSet.add(key);
-            }
-            if (fs.existsSync(brainDir)) {
-                for (const f of fs.readdirSync(brainDir)) {
-                    if (f !== 'tempmediaStorage' && !f.startsWith('.')) {
-                        idSet.add(f);
-                    }
-                }
             }
             if (fs.existsSync(legacyConvDir)) {
                 for (const f of fs.readdirSync(legacyConvDir)) {
@@ -365,13 +640,21 @@ class ConversationManagerProvider {
                 let lastModified = this._tsToMs(summ?.lastModifiedTime);
                 let createdFromSumm = this._tsToMs(summ?.trajectoryMetadata?.createdAt);
                 const stepCount = summ?.stepCount || 0;
-                const transcriptPath = path.join(brainDir, id, '.system_generated', 'logs', 'transcript.jsonl');
-                const hasTranscript = fs.existsSync(transcriptPath);
+                const hasIdeBrain = fs.existsSync(path.join(ideBrainDir, id));
+                const hasIdeDb = fs.existsSync(path.join(ideConvDir, `${id}.db`));
+                const hasAppBrain = fs.existsSync(path.join(appBrainDir, id));
+                const hasAppDb = fs.existsSync(path.join(appConvDir, `${id}.db`));
+                const inIde = hasIdeBrain || hasIdeDb;
+                const inApp = hasAppBrain || hasAppDb;
+                const source = (inIde && inApp) ? 'both' : (inApp ? 'app' : 'ide');
+                const tInfo = ConversationManagerProvider.getTranscriptPath(id, false);
+                const transcriptPath = tInfo?.path;
+                const hasTranscript = Boolean(transcriptPath && fs.existsSync(transcriptPath));
                 const mdPath = path.join(legacyConvDir, `${id}.md`);
-                const dbPath = path.join(convDir, `${id}.db`);
+                const dbPath = inIde ? path.join(ideConvDir, `${id}.db`) : path.join(appConvDir, `${id}.db`);
                 let mtimeMs = 0;
                 let fileSize = 0;
-                if (hasTranscript) {
+                if (hasTranscript && transcriptPath) {
                     try {
                         const st = fs.statSync(transcriptPath);
                         mtimeMs = st.mtimeMs;
@@ -404,6 +687,7 @@ class ConversationManagerProvider {
                 // Cache hit check
                 const cached = cachedMap.get(id);
                 if (cached && cached.mtimeMs === mtimeMs && cached.size === fileSize) {
+                    cached.source = source;
                     if (title && title !== id)
                         cached.title = title;
                     if (cached.userWorkspaces !== undefined) {
@@ -437,7 +721,7 @@ class ConversationManagerProvider {
                 const searchableChunks = [];
                 let totalIndexedChars = 0;
                 const MAX_INDEX_CHARS = 60000;
-                if (hasTranscript) {
+                if (hasTranscript && transcriptPath) {
                     try {
                         const content = fs.readFileSync(transcriptPath, 'utf8');
                         const lines = content.split('\n');
@@ -556,6 +840,7 @@ class ConversationManagerProvider {
                     rawWorkspaces: finalRawWorkspaces,
                     userWorkspaces: cached?.userWorkspaces,
                     isOrphaned,
+                    source,
                     lastModifiedTime: lastModified || createdFromSumm || Date.now(),
                     createdTime: createdFromSumm || firstTime || lastModified || Date.now(),
                     stepCount: totalSteps,
@@ -895,11 +1180,11 @@ class ConversationManagerProvider {
         const conv = this._conversations.find(c => c.id === id);
         if (!conv)
             return;
-        const baseDir = path.join(os.homedir(), '.gemini', 'antigravity-ide');
-        const transcriptPath = path.join(baseDir, 'brain', id, '.system_generated', 'logs', 'transcript.jsonl');
+        const tInfo = ConversationManagerProvider.getTranscriptPath(id, false);
+        const transcriptPath = tInfo?.path;
         const mdPath = path.join(os.homedir(), '.gemini', 'conversations', `${id}.md`);
         const messages = [];
-        if (fs.existsSync(transcriptPath)) {
+        if (transcriptPath && fs.existsSync(transcriptPath)) {
             try {
                 const fileStream = fs.createReadStream(transcriptPath);
                 const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
@@ -1007,9 +1292,9 @@ class ConversationManagerProvider {
         }
     }
     static async openTranscriptLog(id) {
-        const transcriptPath = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'brain', id, '.system_generated', 'logs', 'transcript.jsonl');
-        if (fs.existsSync(transcriptPath)) {
-            const doc = await vscode.workspace.openTextDocument(transcriptPath);
+        const tInfo = ConversationManagerProvider.getTranscriptPath(id, false);
+        if (tInfo && fs.existsSync(tInfo.path)) {
+            const doc = await vscode.workspace.openTextDocument(tInfo.path);
             await vscode.window.showTextDocument(doc);
         }
         else {
@@ -1038,16 +1323,11 @@ class ConversationManagerProvider {
             const list = ConversationManagerProvider.readDiskCache();
             conv = list.find(c => c.id === id);
         }
-        const baseDir = path.join(os.homedir(), '.gemini', 'antigravity-ide');
-        const transcriptFullPath = path.join(baseDir, 'brain', id, '.system_generated', 'logs', 'transcript_full.jsonl');
-        const transcriptPath = path.join(baseDir, 'brain', id, '.system_generated', 'logs', 'transcript.jsonl');
+        const tInfo = ConversationManagerProvider.getTranscriptPath(id, true);
         const legacyMdPath = path.join(os.homedir(), '.gemini', 'conversations', `${id}.md`);
         let mdContent = '';
-        const activeTranscript = fs.existsSync(transcriptFullPath)
-            ? transcriptFullPath
-            : (fs.existsSync(transcriptPath) ? transcriptPath : null);
-        if (activeTranscript) {
-            mdContent = await ConversationManagerProvider.convertTranscriptToMarkdown(id, activeTranscript, conv);
+        if (tInfo && fs.existsSync(tInfo.path)) {
+            mdContent = await ConversationManagerProvider.convertTranscriptToMarkdown(id, tInfo.path, conv);
         }
         else if (fs.existsSync(legacyMdPath)) {
             try {
@@ -1245,13 +1525,14 @@ class ConversationManagerProvider {
     static async createTranscriptFork(sourceId, stepIndex, sourceConv) {
         try {
             const baseDir = path.join(os.homedir(), '.gemini', 'antigravity-ide');
-            const srcBrainDir = path.join(baseDir, 'brain', sourceId);
-            const srcLogsDir = path.join(srcBrainDir, '.system_generated', 'logs');
-            const srcTranscript = path.join(srcLogsDir, 'transcript.jsonl');
-            if (!fs.existsSync(srcTranscript)) {
+            const tInfo = ConversationManagerProvider.getTranscriptPath(sourceId, false);
+            const srcTranscript = tInfo?.path;
+            if (!srcTranscript || !fs.existsSync(srcTranscript)) {
                 vscode.window.showErrorMessage('No transcript file found to fork.');
                 return null;
             }
+            const srcLogsDir = path.dirname(srcTranscript);
+            const srcBrainDir = path.resolve(srcLogsDir, '..', '..');
             const newId = crypto.randomUUID();
             const dstBrainDir = path.join(baseDir, 'brain', newId);
             const dstLogsDir = path.join(dstBrainDir, '.system_generated', 'logs');
@@ -1414,11 +1695,23 @@ class ConversationManagerProvider {
                 await vscode.commands.executeCommand('workbench.action.deleteCascadeFromManager', id);
             }
             catch { }
-            const baseDir = path.join(os.homedir(), '.gemini', 'antigravity-ide');
-            for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                const f = path.join(baseDir, 'conversations', `${id}${ext}`);
-                if (fs.existsSync(f))
-                    fs.unlinkSync(f);
+            const ideBaseDir = path.join(os.homedir(), '.gemini', 'antigravity-ide');
+            const appBaseDir = path.join(os.homedir(), '.gemini', 'antigravity');
+            for (const bDir of [ideBaseDir, appBaseDir]) {
+                for (const ext of ['.db', '.db-shm', '.db-wal']) {
+                    const f = path.join(bDir, 'conversations', `${id}${ext}`);
+                    if (fs.existsSync(f))
+                        try {
+                            fs.unlinkSync(f);
+                        }
+                        catch { }
+                }
+                const br = path.join(bDir, 'brain', id);
+                if (fs.existsSync(br))
+                    try {
+                        fs.rmSync(br, { recursive: true, force: true });
+                    }
+                    catch { }
             }
             this._conversations = this._conversations.filter(c => c.id !== id);
             this._writeDiskCache(this._conversations);
@@ -2317,6 +2610,43 @@ class ConversationManagerProvider {
     color: #ffffff;
     box-shadow: 0 0 0 2px #ff9800;
   }
+  .source-tag {
+    display: inline-block;
+    padding: 0px 4px;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 14px;
+    border-radius: 3px;
+    margin-right: 4px;
+    letter-spacing: 0.3px;
+    vertical-align: middle;
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+  .source-tag.ide {
+    background: rgba(59, 130, 246, 0.18);
+    color: #60a5fa;
+    border: 1px solid rgba(96, 165, 250, 0.35);
+  }
+  .source-tag.app {
+    background: rgba(245, 158, 11, 0.18);
+    color: #fbbf24;
+    border: 1px solid rgba(251, 191, 36, 0.35);
+  }
+  .source-tag.both {
+    background: rgba(16, 185, 129, 0.18);
+    color: #34d399;
+    border: 1px solid rgba(52, 211, 153, 0.35);
+  }
+  .conv-folder-badge {
+    display: inline-flex;
+    align-items: center;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+  }
 </style>
 </head>
 <body>
@@ -2594,6 +2924,11 @@ class ConversationManagerProvider {
       vscode.postMessage({ type: 'openTrafficReport' });
       return;
     }
+    const bSync = ev.target.closest('#btnSync');
+    if (bSync) {
+      vscode.postMessage({ type: 'sync' });
+      return;
+    }
     const bExport = ev.target.closest('#btnExport') || ev.target.closest('#btnBackup');
     if (bExport) {
       vscode.postMessage({ type: 'export' });
@@ -2759,6 +3094,7 @@ class ConversationManagerProvider {
         '</div>' +
         '<div style="display:flex;align-items:center;gap:5px;">' +
           '<span class="overview-scope-badge">' + scopeLabel + '</span>' +
+          '<button class="btn-mini" id="btnSync" title="Sync all conversations between IDE and Standalone App" style="padding:1.5px 6px;font-size:10.5px;">Sync</button>' +
           '<button class="btn-mini" id="btnImport" title="Import conversations from .zip archive (deduplicates existing)" style="padding:1.5px 6px;font-size:10.5px;">Import</button>' +
           '<button class="btn-mini" id="btnExport" title="Export all conversations to .zip archive" style="padding:1.5px 6px;font-size:10.5px;">Export</button>' +
           '<button class="btn-mini" id="btnRefreshOverview" title="Refresh conversations" style="padding:1.5px 6px;font-size:10.5px;">Refresh</button>' +
@@ -2817,11 +3153,19 @@ class ConversationManagerProvider {
       const snippetRaw = c.matchSnippet || c.firstMessageSnippet;
       const snippetHighlighted = snippetRaw ? highlightMatches(snippetRaw, state.searchQuery) : '';
       const totalMsgs = (c.userMsgs || 0) + (c.modelMsgs || 0);
+      let sourceBadge = '';
+      if (c.source === 'app') {
+        sourceBadge = '<span class="source-tag app" title="Standalone App (~/.gemini/antigravity)">App</span>';
+      } else if (c.source === 'both') {
+        sourceBadge = '<span class="source-tag both" title="Synced in both IDE and Standalone App">Both</span>';
+      } else {
+        sourceBadge = '<span class="source-tag ide" title="Antigravity IDE (~/.gemini/antigravity-ide)">IDE</span>';
+      }
 
       html += '<div class="conv-item ' + (isSel ? 'active' : '') + '" data-id="' + escapeHtml(c.id) + '">' +
         '<div class="conv-title" title="' + escapeHtml(c.title) + '">' + titleHighlighted + '</div>' +
         '<div class="conv-meta">' +
-        '<span>' + wsDisplay + '</span>' +
+        '<span class="conv-folder-badge">' + sourceBadge + wsDisplay + '</span>' +
         '<span>&middot;</span>' +
         '<span>' + totalMsgs + ' messages (' + (c.userMsgs || 0) + '/' + (c.modelMsgs || 0) + ')</span>' +
         '<span>&middot;</span>' +
@@ -2929,6 +3273,7 @@ class ConversationManagerProvider {
       '</div>' +
 
       '<div class="metadata-bar">' +
+        '<div class="m3-chip"><b>Source:</b> ' + (c.source === 'app' ? '<span class="source-tag app">App</span> <span>Standalone (~/.gemini/antigravity)</span>' : (c.source === 'both' ? '<span class="source-tag both">Both</span> <span>Synced (IDE &amp; App)</span>' : '<span class="source-tag ide">IDE</span> <span>Antigravity IDE (~/.gemini/antigravity-ide)</span>')) + '</div>' +
         '<div class="m3-chip"><b>ID:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="copy" data-copy="' + escapeHtml(c.id) + '" title="Click to copy full ID">' + escapeHtml(c.id) + '</span></div>' +
         '<div class="m3-chip"><b>Workspace:</b> <span class="meta-link" data-action="copy" data-copy="' + escapeHtml(wsStr) + '" title="' + wsFullTitle + ' (click to copy)">' + wsDisplay + '</span></div>' +
         '<div class="m3-chip"><b>Steps:</b> <span>' + c.stepCount + ' (' + (c.hasTranscript ? 'Transcript' : 'DB') + ')</span></div>' +
@@ -3215,5 +3560,5 @@ class ConversationManagerProvider {
     }
 }
 exports.ConversationManagerProvider = ConversationManagerProvider;
-ConversationManagerProvider.CACHE_VERSION = 7;
+ConversationManagerProvider.CACHE_VERSION = 8;
 ConversationManagerProvider.CACHE_FILE = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'enhancer_conversations_cache.json');

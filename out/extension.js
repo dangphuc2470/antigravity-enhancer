@@ -847,6 +847,8 @@ function activate(context) {
     }), vscode.commands.registerCommand('antigravity.importConversations', async () => {
         const { ConversationBackupService } = require('./conversationBackup');
         await ConversationBackupService.importConversations();
+    }), vscode.commands.registerCommand('antigravity.syncConversations', async () => {
+        await conversationManager_1.ConversationManagerProvider.syncConversations();
     }));
     // Register external file opener for binaries, office, media, archives
     (0, externalOpener_1.registerExternalOpener)(context);
