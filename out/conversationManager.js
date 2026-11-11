@@ -144,6 +144,9 @@ class ConversationManagerProvider {
                 case 'delete':
                     await this._deleteConversation(message.id);
                     break;
+                case 'moveConversation':
+                    await this._moveConversation(message.id);
+                    break;
             }
         }, null, this._disposables);
         this._loadConversations();
@@ -215,12 +218,16 @@ class ConversationManagerProvider {
         try {
             if (fs.existsSync(ConversationManagerProvider.CACHE_FILE)) {
                 const raw = JSON.parse(fs.readFileSync(ConversationManagerProvider.CACHE_FILE, 'utf8'));
-                if (raw && !Array.isArray(raw) && raw.version === ConversationManagerProvider.CACHE_VERSION && Array.isArray(raw.items)) {
+                if (raw && !Array.isArray(raw) && (raw.version === 6 || raw.version === ConversationManagerProvider.CACHE_VERSION) && Array.isArray(raw.items)) {
                     for (const item of raw.items) {
                         if (item && item.id) {
                             if (Array.isArray(item.workspaces)) {
                                 item.workspaces = item.workspaces.map((w) => ConversationManagerProvider.normalizePath(w));
                             }
+                            else {
+                                item.workspaces = [];
+                            }
+                            item.isOrphaned = item.workspaces.length > 0 && !fs.existsSync(item.workspaces[0]);
                             list.push(item);
                         }
                     }
@@ -360,10 +367,14 @@ class ConversationManagerProvider {
                 if (cached && cached.mtimeMs === mtimeMs && cached.size === fileSize) {
                     if (title && title !== id)
                         cached.title = title;
-                    if (workspaces.length > 0)
+                    if (cached.userWorkspaces !== undefined) {
+                        cached.workspaces = cached.userWorkspaces;
+                    }
+                    else if (workspaces.length > 0) {
                         cached.workspaces = workspaces;
-                    if (rawWorkspaces.length > 0)
                         cached.rawWorkspaces = rawWorkspaces;
+                    }
+                    cached.isOrphaned = cached.workspaces.length > 0 && !fs.existsSync(cached.workspaces[0]);
                     if (lastModified)
                         cached.lastModifiedTime = lastModified;
                     if (stepCount > cached.stepCount)
@@ -496,11 +507,16 @@ class ConversationManagerProvider {
                 const cumulativeTokens = hasTranscript
                     ? Math.max(estTotalTokens, Math.round((cumulativeInputChars + cumulativeOutputChars) / 3.2))
                     : estTotalTokens;
+                const finalWorkspaces = (cached?.userWorkspaces !== undefined) ? cached.userWorkspaces : workspaces;
+                const finalRawWorkspaces = (cached?.userWorkspaces !== undefined) ? (cached.rawWorkspaces || []) : rawWorkspaces;
+                const isOrphaned = finalWorkspaces.length > 0 && !fs.existsSync(finalWorkspaces[0]);
                 const item = {
                     id,
                     title: (title === id && firstMsg) ? firstMsg.slice(0, 60) : title,
-                    workspaces,
-                    rawWorkspaces,
+                    workspaces: finalWorkspaces,
+                    rawWorkspaces: finalRawWorkspaces,
+                    userWorkspaces: cached?.userWorkspaces,
+                    isOrphaned,
                     lastModifiedTime: lastModified || createdFromSumm || Date.now(),
                     createdTime: createdFromSumm || firstTime || lastModified || Date.now(),
                     stepCount: totalSteps,
@@ -535,7 +551,7 @@ class ConversationManagerProvider {
         }
     }
     static matchesFolder(conv, folderLower, includeSub) {
-        if (folderLower === '(no workspace)') {
+        if (folderLower === 'standalone' || folderLower === '(no workspace)') {
             return conv.workspaces.length === 0;
         }
         const target = ConversationManagerProvider.normalizePath(folderLower).toLowerCase();
@@ -560,21 +576,21 @@ class ConversationManagerProvider {
             if (currentWs && ConversationManagerProvider.matchesFolder(conv, currentWs.toLowerCase(), includeSubfolders)) {
                 currentWorkspaceCount++;
             }
-            const wsList = conv.workspaces.length > 0 ? conv.workspaces : ['(No Workspace)'];
+            const wsList = conv.workspaces.length > 0 ? conv.workspaces : ['Standalone'];
             for (const ws of wsList) {
-                if (ws === '(No Workspace)') {
-                    if (!rootNodesMap.has(ws)) {
-                        rootNodesMap.set(ws, {
-                            id: ws,
-                            name: ws,
-                            fullPath: ws,
+                if (ws === 'Standalone' || ws === '(No Workspace)') {
+                    if (!rootNodesMap.has('Standalone')) {
+                        rootNodesMap.set('Standalone', {
+                            id: 'Standalone',
+                            name: 'Standalone',
+                            fullPath: 'Standalone',
                             directCount: 0,
                             totalCount: 0,
                             childrenMap: new Map(),
                             isDriveOrRoot: true
                         });
                     }
-                    const node = rootNodesMap.get(ws);
+                    const node = rootNodesMap.get('Standalone');
                     node.directCount++;
                     node.totalCount++;
                     continue;
@@ -637,6 +653,8 @@ class ConversationManagerProvider {
                 childrenArray.push(compactNode(child));
             }
             childrenArray.sort((a, b) => a.name.localeCompare(b.name));
+            const isStandalone = fullPath === 'Standalone' || fullPath === '(No Workspace)';
+            const isOrphaned = !isStandalone && !fs.existsSync(fullPath);
             return {
                 id: fullPath,
                 name,
@@ -644,6 +662,7 @@ class ConversationManagerProvider {
                 directCount,
                 totalCount,
                 isDriveOrRoot: Boolean(node.isDriveOrRoot),
+                isOrphaned,
                 children: childrenArray
             };
         };
@@ -652,9 +671,9 @@ class ConversationManagerProvider {
             serializedRoots.push(compactNode(root));
         }
         serializedRoots.sort((a, b) => {
-            if (a.fullPath === '(No Workspace)')
+            if (a.fullPath === 'Standalone' || a.fullPath === '(No Workspace)')
                 return 1;
-            if (b.fullPath === '(No Workspace)')
+            if (b.fullPath === 'Standalone' || b.fullPath === '(No Workspace)')
                 return -1;
             return a.name.localeCompare(b.name);
         });
@@ -683,8 +702,16 @@ class ConversationManagerProvider {
             folderName = currentWs ? (currentWs.split('/').filter(Boolean).pop() || 'Current Workspace') : 'Current Workspace';
         }
         else if (this._selectedFolder !== 'ALL') {
-            const parts = this._selectedFolder.split('/').filter(Boolean);
-            folderName = parts.length > 0 ? parts[parts.length - 1] : this._selectedFolder;
+            if (this._selectedFolder === 'Standalone' || this._selectedFolder === '(No Workspace)') {
+                folderName = 'Standalone';
+            }
+            else {
+                const parts = this._selectedFolder.split('/').filter(Boolean);
+                folderName = parts.length > 0 ? parts[parts.length - 1] : this._selectedFolder;
+                if (!fs.existsSync(this._selectedFolder)) {
+                    folderName += ' (orphaned)';
+                }
+            }
         }
         let folderTotalConversations = folderList.length;
         let folderTotalMessages = 0;
@@ -991,6 +1018,106 @@ class ConversationManagerProvider {
         catch (e) {
             vscode.window.showErrorMessage('Failed to delete conversation: ' + (e?.message || String(e)));
         }
+    }
+    async _moveConversation(id) {
+        const conv = this._conversations.find(c => c.id === id);
+        if (!conv)
+            return;
+        const currentWs = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0])
+            ? ConversationManagerProvider.normalizePath(vscode.workspace.workspaceFolders[0].uri.fsPath)
+            : '';
+        const knownSet = new Set();
+        for (const c of this._conversations) {
+            for (const w of c.workspaces) {
+                if (w && w !== 'Standalone' && w !== '(No Workspace)') {
+                    knownSet.add(w);
+                }
+            }
+        }
+        if (currentWs)
+            knownSet.add(currentWs);
+        const items = [];
+        items.push({
+            label: '$(symbol-misc) Standalone',
+            description: 'No workspace attached',
+            detail: 'Convert to standalone conversation'
+        });
+        if (currentWs) {
+            items.push({
+                label: `$(folder-active) ${path.basename(currentWs)}`,
+                description: currentWs,
+                detail: 'Current open workspace in editor'
+            });
+        }
+        const otherWorkspaces = Array.from(knownSet)
+            .filter(w => w !== currentWs)
+            .sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
+        for (const ws of otherWorkspaces) {
+            const exists = fs.existsSync(ws);
+            items.push({
+                label: `$(folder) ${path.basename(ws)}${exists ? '' : ' (orphaned)'}`,
+                description: ws,
+                detail: exists ? undefined : 'Folder not found on disk'
+            });
+        }
+        items.push({
+            label: '$(folder-opened) Browse folder...',
+            description: 'Choose a different folder from disk...'
+        });
+        const selected = await vscode.window.showQuickPick(items, {
+            placeHolder: `Move "${conv.title}" to folder...`,
+            title: 'Move Conversation to Folder'
+        });
+        if (!selected)
+            return;
+        let targetPath = null;
+        if (selected.label.includes('Standalone')) {
+            targetPath = 'STANDALONE';
+        }
+        else if (selected.label.includes('Browse folder...')) {
+            const uris = await vscode.window.showOpenDialog({
+                canSelectFiles: false,
+                canSelectFolders: true,
+                canSelectMany: false,
+                openLabel: 'Select Folder',
+                title: 'Choose Workspace Folder for Conversation'
+            });
+            if (uris && uris.length > 0) {
+                targetPath = uris[0].fsPath;
+            }
+            else {
+                return;
+            }
+        }
+        else {
+            targetPath = selected.description || selected.label;
+        }
+        if (!targetPath)
+            return;
+        if (targetPath === 'STANDALONE') {
+            conv.workspaces = [];
+            conv.rawWorkspaces = [];
+            conv.userWorkspaces = [];
+            conv.isOrphaned = false;
+        }
+        else {
+            const norm = ConversationManagerProvider.normalizePath(targetPath);
+            conv.workspaces = [norm];
+            conv.rawWorkspaces = [vscode.Uri.file(targetPath).toString()];
+            conv.userWorkspaces = [norm];
+            conv.isOrphaned = !fs.existsSync(norm);
+        }
+        this._writeDiskCache(this._conversations);
+        if (this._selectedId === id) {
+            await this._sendDetail(id);
+        }
+        this._sendState();
+        try {
+            const { ConversationExplorerViewProvider } = require('./conversationTreeProvider');
+            ConversationExplorerViewProvider.currentInstance?.updateData(this._conversations);
+        }
+        catch (_) { }
+        vscode.window.showInformationMessage(`Moved "${conv.title}" to ${conv.workspaces[0] || 'Standalone'}`);
     }
     _updateHtml() {
         this._panel.webview.html = `<!DOCTYPE html>
@@ -1579,6 +1706,60 @@ class ConversationManagerProvider {
     padding: 20px;
     text-align: center;
   }
+
+  .orphaned-tag {
+    font-size: 10px;
+    color: var(--vscode-editorWarning-foreground, #cca700);
+    opacity: 0.85;
+    font-style: italic;
+    font-weight: normal;
+    margin-left: 3px;
+    vertical-align: middle;
+  }
+
+  .context-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 9998;
+    background: transparent;
+  }
+  .context-menu {
+    position: fixed;
+    z-index: 9999;
+    background: var(--vscode-menu-background, #252526);
+    color: var(--vscode-menu-foreground, #cccccc);
+    border: 1px solid var(--vscode-menu-border, #454545);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: 4px 0;
+    min-width: 175px;
+    font-size: 12px;
+    user-select: none;
+  }
+  .context-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: background 0.1s ease, color 0.1s ease;
+  }
+  .context-menu-item:hover {
+    background: var(--vscode-menu-selectionBackground, #04395e);
+    color: var(--vscode-menu-selectionForeground, #ffffff);
+  }
+  .context-menu-item.danger {
+    color: var(--danger, #f87171);
+  }
+  .context-menu-item.danger:hover {
+    background: rgba(239, 68, 68, 0.2);
+    color: #fca5a5;
+  }
+  .context-menu-separator {
+    height: 1px;
+    background: var(--vscode-menu-separatorBackground, var(--border, rgba(255, 255, 255, 0.08)));
+    margin: 4px 0;
+  }
 </style>
 </head>
 <body>
@@ -1623,6 +1804,9 @@ class ConversationManagerProvider {
     </div>
 
   </div>
+
+  <div id="contextBackdrop" class="context-backdrop" style="display:none;"></div>
+  <div id="contextMenu" class="context-menu" style="display:none;"></div>
 
 <script>
   const vscode = acquireVsCodeApi();
@@ -1691,12 +1875,99 @@ class ConversationManagerProvider {
     vscode.postMessage({ type: 'sort', sortBy: state.sortBy });
   });
 
+  // Context Menu functions
+  function showContextMenu(x, y, id) {
+    const c = state.conversations.find(item => item.id === id);
+    if (!c) return;
+
+    const menu = document.getElementById('contextMenu');
+    const backdrop = document.getElementById('contextBackdrop');
+
+    menu.innerHTML = 
+      '<div class="context-menu-item" data-action="move" data-id="' + escapeHtml(c.id) + '">' +
+        '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10l-.5-.5zm-.5 10H2V3h4.29l.86.85.35.15H14v9z"/></svg>' +
+        '<span>Move to Folder...</span>' +
+      '</div>' +
+      '<div class="context-menu-item" data-action="openInChat" data-id="' + escapeHtml(c.id) + '">' +
+        '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2.5 3A1.5 1.5 0 0 0 1 4.5v7A1.5 1.5 0 0 0 2.5 13h1.86l2.14 2.14a.5.5 0 0 0 .85-.35V13h6.15a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 12.5 3h-10z"/></svg>' +
+        '<span>Open in Chat</span>' +
+      '</div>' +
+      '<div class="context-menu-item" data-action="openTranscriptLog" data-id="' + escapeHtml(c.id) + '">' +
+        '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 4.5V14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2h5.5L14 4.5zm-3 0A1.5 1.5 0 0 1 9.5 3V1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V4.5h-2z"/></svg>' +
+        '<span>View Log</span>' +
+      '</div>' +
+      '<div class="context-menu-item" data-action="rename" data-id="' + escapeHtml(c.id) + '" data-title="' + escapeHtml(c.title) + '">' +
+        '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M12.854.146a.5.5 0 0 0-.707 0L10.5 1.793 14.207 5.5l1.647-1.646a.5.5 0 0 0 0-.708l-3-3zm.646 6.061L9.793 2.5 3.293 9H3.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.207l6.5-6.5zm-7.468 7.468A.5.5 0 0 1 6 13.5V13h-.5a.5.5 0 0 1-.5-.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.5-.5V10h-.5a.499.499 0 0 1-.175-.032l-.179.178a.5.5 0 0 0-.11.168l-2 5a.5.5 0 0 0 .65.65l5-2a.5.5 0 0 0 .168-.11l.178-.178z"/></svg>' +
+        '<span>Rename...</span>' +
+      '</div>' +
+      '<div class="context-menu-separator"></div>' +
+      '<div class="context-menu-item danger" data-action="delete" data-id="' + escapeHtml(c.id) + '">' +
+        '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg>' +
+        '<span>Delete</span>' +
+      '</div>';
+
+    const menuWidth = 185;
+    const menuHeight = 165;
+    const posX = (x + menuWidth > window.innerWidth) ? Math.max(10, window.innerWidth - menuWidth - 10) : x;
+    const posY = (y + menuHeight > window.innerHeight) ? Math.max(10, window.innerHeight - menuHeight - 10) : y;
+
+    menu.style.left = posX + 'px';
+    menu.style.top = posY + 'px';
+    menu.style.display = 'block';
+    backdrop.style.display = 'block';
+  }
+
+  function hideContextMenu() {
+    const menu = document.getElementById('contextMenu');
+    const backdrop = document.getElementById('contextBackdrop');
+    if (menu) menu.style.display = 'none';
+    if (backdrop) backdrop.style.display = 'none';
+  }
+
+  document.getElementById('contextMenu').addEventListener('click', ev => {
+    const item = ev.target.closest('[data-action]');
+    if (!item) return;
+    const action = item.getAttribute('data-action');
+    const id = item.getAttribute('data-id');
+    hideContextMenu();
+    if (action === 'move' && id) {
+      vscode.postMessage({ type: 'moveConversation', id });
+    } else if (action === 'openInChat' && id) {
+      vscode.postMessage({ type: 'openInChat', id });
+    } else if (action === 'openTranscriptLog' && id) {
+      vscode.postMessage({ type: 'openTranscriptLog', id });
+    } else if (action === 'rename' && id) {
+      const title = item.getAttribute('data-title') || '';
+      vscode.postMessage({ type: 'requestRename', id, oldTitle: title });
+    } else if (action === 'delete' && id) {
+      vscode.postMessage({ type: 'delete', id });
+    }
+  });
+
+  document.getElementById('contextBackdrop').addEventListener('click', hideContextMenu);
+  document.getElementById('contextBackdrop').addEventListener('contextmenu', ev => {
+    ev.preventDefault();
+    hideContextMenu();
+  });
+
   // Event delegation for Conversation List
   document.getElementById('convList').addEventListener('click', ev => {
     const item = ev.target.closest('.conv-item[data-id]');
     if (item) {
       const id = item.getAttribute('data-id');
       if (id) selectConversation(id);
+    }
+  });
+
+  document.getElementById('convList').addEventListener('contextmenu', ev => {
+    const item = ev.target.closest('.conv-item[data-id]');
+    if (item) {
+      ev.preventDefault();
+      const id = item.getAttribute('data-id');
+      if (id) {
+        selectConversation(id);
+        showContextMenu(ev.clientX, ev.clientY, id);
+      }
     }
   });
 
@@ -1713,6 +1984,8 @@ class ConversationManagerProvider {
     } else if (action === 'rename' && id) {
       const title = btn.getAttribute('data-title') || '';
       vscode.postMessage({ type: 'requestRename', id, oldTitle: title });
+    } else if (action === 'move' && id) {
+      vscode.postMessage({ type: 'moveConversation', id });
     } else if (action === 'delete' && id) {
       vscode.postMessage({ type: 'delete', id });
     } else if (action === 'copy') {
@@ -1840,6 +2113,8 @@ class ConversationManagerProvider {
       iconSvg = '<svg class="overview-title-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 2H2a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1zm-1 10H3V4h10v8zM5 6h6v1H5V6zm0 3h6v1H5V9z"/></svg>';
     } else if (state.selectedFolder === 'CURRENT') {
       iconSvg = '<svg class="overview-title-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.251.068a.5.5 0 0 1 .42.58L10.477 6.5H14a.5.5 0 0 1 .372.832l-9.5 10.5a.5.5 0 0 1-.84-.528l1.2-5.804H1.5a.5.5 0 0 1-.372-.832l9.5-10.5a.5.5 0 0 1 .623-.1z"/></svg>';
+    } else if (state.selectedFolder === 'Standalone' || state.selectedFolder === '(No Workspace)') {
+      iconSvg = '<svg class="overview-title-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color:var(--muted);"><path d="M14 2H2a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1zm-1 10H3V4h10v8z"/></svg>';
     } else if (/^[a-zA-Z]:/.test(state.selectedFolder)) {
       iconSvg = '<svg class="overview-title-icon drive-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 3H3V4h10v2zm1 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1zm-1 3H3v-2h10v2z"/></svg>';
     } else {
@@ -1915,7 +2190,10 @@ class ConversationManagerProvider {
     let html = '';
     for (const c of state.conversations) {
       const isSel = c.id === state.selectedId;
-      const wsName = c.workspaces.length > 0 ? (c.workspaces[0].split('/').pop() || c.workspaces[0]) : 'No Workspace';
+      const isStandalone = !c.workspaces || c.workspaces.length === 0 || c.workspaces[0] === 'Standalone' || c.workspaces[0] === '(No Workspace)';
+      const wsName = isStandalone ? 'Standalone' : (c.workspaces[0].split('/').pop() || c.workspaces[0]);
+      const wsOrphaned = !isStandalone && Boolean(c.isOrphaned);
+      const wsDisplay = escapeHtml(wsName) + (wsOrphaned ? ' <span class="orphaned-tag">(orphaned)</span>' : '');
       const timeStr = formatTime(c.lastModifiedTime);
       const titleHighlighted = highlightMatches(c.title, state.searchQuery);
       const snippetRaw = c.matchSnippet || c.firstMessageSnippet;
@@ -1925,7 +2203,7 @@ class ConversationManagerProvider {
       html += '<div class="conv-item ' + (isSel ? 'active' : '') + '" data-id="' + escapeHtml(c.id) + '">' +
         '<div class="conv-title" title="' + escapeHtml(c.title) + '">' + titleHighlighted + '</div>' +
         '<div class="conv-meta">' +
-        '<span>' + escapeHtml(wsName) + '</span>' +
+        '<span>' + wsDisplay + '</span>' +
         '<span>&middot;</span>' +
         '<span>' + totalMsgs + ' msgs (' + (c.userMsgs || 0) + '/' + (c.modelMsgs || 0) + ')</span>' +
         '<span>&middot;</span>' +
@@ -1949,8 +2227,12 @@ class ConversationManagerProvider {
     const msgs = state.detail.messages || [];
     const q = (state.searchQuery || '').trim().toLowerCase();
 
-    const wsStr = c.workspaces.join(', ') || '(No Workspace)';
-    const wsShort = c.workspaces.length > 0 ? (c.workspaces[0].split('/').pop() || c.workspaces[0]) : '(No Workspace)';
+    const isStandalone = !c.workspaces || c.workspaces.length === 0 || c.workspaces[0] === 'Standalone' || c.workspaces[0] === '(No Workspace)';
+    const wsStr = isStandalone ? 'Standalone' : c.workspaces.join(', ');
+    const wsShort = isStandalone ? 'Standalone' : (c.workspaces[0].split('/').pop() || c.workspaces[0]);
+    const wsOrphaned = !isStandalone && Boolean(c.isOrphaned);
+    const wsDisplay = escapeHtml(wsShort) + (wsOrphaned ? ' <span class="orphaned-tag">(orphaned)</span>' : '');
+    const wsFullTitle = escapeHtml(wsStr) + (wsOrphaned ? ' (orphaned)' : '');
     const createdStr = new Date(c.createdTime).toLocaleString();
     const modifiedStr = new Date(c.lastModifiedTime).toLocaleString();
     const durationMs = Math.max(0, c.lastModifiedTime - c.createdTime);
@@ -1998,6 +2280,7 @@ class ConversationManagerProvider {
           '<button class="btn-primary" data-action="openInChat" data-id="' + escapeHtml(c.id) + '">Open in Chat</button>' +
           '<button class="btn-secondary" data-action="openTranscriptLog" data-id="' + escapeHtml(c.id) + '">View Log</button>' +
           '<button class="btn-secondary" data-action="rename" data-id="' + escapeHtml(c.id) + '" data-title="' + escapeHtml(c.title) + '">Rename</button>' +
+          '<button class="btn-secondary" data-action="move" data-id="' + escapeHtml(c.id) + '">Move...</button>' +
           '<button class="btn-secondary btn-danger" data-action="delete" data-id="' + escapeHtml(c.id) + '">Delete</button>' +
         '</div>' +
       '</div>' +
@@ -2027,7 +2310,7 @@ class ConversationManagerProvider {
 
       '<div class="metadata-bar">' +
         '<div class="metadata-item"><b>ID:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="copy" data-copy="' + escapeHtml(c.id) + '" title="Click to copy full ID">' + escapeHtml(c.id) + '</span></div>' +
-        '<div class="metadata-item"><b>Workspace:</b> <span class="meta-link" data-action="copy" data-copy="' + escapeHtml(wsStr) + '" title="' + escapeHtml(wsStr) + ' (click to copy)">' + escapeHtml(wsShort) + '</span></div>' +
+        '<div class="metadata-item"><b>Workspace:</b> <span class="meta-link" data-action="copy" data-copy="' + escapeHtml(wsStr) + '" title="' + wsFullTitle + ' (click to copy)">' + wsDisplay + '</span></div>' +
         '<div class="metadata-item"><b>Steps:</b> <span>' + c.stepCount + ' (' + (c.hasTranscript ? 'Transcript' : 'DB') + ')</span></div>' +
         '<div class="metadata-item"><b>Created:</b> <span>' + escapeHtml(createdStr) + '</span></div>' +
         '<div class="metadata-item"><b>Modified:</b> <span>' + escapeHtml(modifiedStr) + '</span></div>' +
@@ -2100,5 +2383,5 @@ class ConversationManagerProvider {
     }
 }
 exports.ConversationManagerProvider = ConversationManagerProvider;
-ConversationManagerProvider.CACHE_VERSION = 6;
+ConversationManagerProvider.CACHE_VERSION = 7;
 ConversationManagerProvider.CACHE_FILE = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'enhancer_conversations_cache.json');

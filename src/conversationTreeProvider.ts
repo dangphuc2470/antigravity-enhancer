@@ -251,6 +251,14 @@ export class ConversationExplorerViewProvider implements vscode.WebviewViewProvi
       text-overflow: ellipsis;
       flex: 1;
     }
+    .orphaned-tag {
+      font-size: 10px;
+      color: var(--vscode-editorWarning-foreground, #cca700);
+      opacity: 0.85;
+      font-style: italic;
+      font-weight: normal;
+      margin-left: 3px;
+    }
     .tree-badge {
       margin-left: auto;
       background: var(--badge-bg);
@@ -348,7 +356,9 @@ export class ConversationExplorerViewProvider implements vscode.WebviewViewProvi
         const count = state.includeSubfolders ? node.totalCount : node.directCount;
 
         let iconSvg = '';
-        if (node.isDriveOrRoot) {
+        if (node.fullPath === 'Standalone' || node.fullPath === '(No Workspace)') {
+          iconSvg = '<svg class="tree-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color:var(--muted);"><path d="M14 2H2a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1zm-1 10H3V4h10v8z"/></svg>';
+        } else if (node.isDriveOrRoot) {
           iconSvg = '<svg class="tree-icon drive-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 3H3V4h10v2zm1 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1zm-1 3H3v-2h10v2z"/></svg>';
         } else if (hasChildren && isExpanded) {
           iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 14h10.23a1.5 1.5 0 0 0 1.41-1l2-5.5A1.5 1.5 0 0 0 13.73 5.5H7.71l-.85-.85L6.51 4h-5l-.5.5v9l.5.5zm1-8.5h3.79l.86.85.35.15H13.73a.5.5 0 0 1 .47.67l-2 5.5a.5.5 0 0 1-.47.33H2.5v-7.5z"/></svg>';
@@ -356,12 +366,14 @@ export class ConversationExplorerViewProvider implements vscode.WebviewViewProvi
           iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10l-.5-.5zm-.5 10H2V3h4.29l.86.85.35.15H14v9z"/></svg>';
         }
 
+        const orphanedBadge = node.isOrphaned ? ' <span class="orphaned-tag">(orphaned)</span>' : '';
+
         let out = '<div class="tree-item ' + (isSel ? 'active' : '') + '" style="padding-left:' + (indent + 8) + 'px" data-folder="' + escapedPath + '">' +
           '<span class="tree-chevron ' + (isExpanded ? 'expanded' : '') + '" ' + (hasChildren ? 'data-toggle="' + escapedPath + '"' : '') + '>' +
           (hasChildren ? '<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3.5l5 4.5-5 4.5V3.5z"/></svg>' : '') +
           '</span>' +
           iconSvg +
-          '<span class="tree-label" title="' + escapedPath + '">' + escapeHtml(node.name) + '</span>' +
+          '<span class="tree-label" title="' + escapedPath + '">' + escapeHtml(node.name) + orphanedBadge + '</span>' +
           '<span class="tree-badge">' + count + '</span>' +
           '</div>';
 
