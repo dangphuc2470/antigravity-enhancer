@@ -953,47 +953,19 @@ class ConversationManagerProvider {
   ::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.35)); }
   ::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.6)); }
 
-  /* Top Toolbar */
-  .top-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 6px 14px;
-    background: var(--sidebar-bg);
-    border-bottom: 1px solid var(--border);
+  /* Splitter / Resizer handles */
+  .resizer {
+    width: 6px;
+    background: var(--border);
+    cursor: col-resize;
+    position: relative;
+    z-index: 10;
+    margin: 0 -1px;
     flex-shrink: 0;
+    transition: background 0.15s ease;
   }
-  .top-bar .title-group {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.2px;
-  }
-  .badge-count {
-    background: var(--badge-bg);
-    color: var(--badge-fg);
-    padding: 1px 7px;
-    border-radius: 99px;
-    font-size: 11px;
-    font-weight: 500;
-  }
-  .btn-icon-text {
-    background: var(--btn-sec-bg);
-    border: 1px solid transparent;
-    color: var(--btn-sec-fg);
-    padding: 3px 9px;
-    border-radius: 2px;
-    cursor: pointer;
-    font-size: 12px;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-family: inherit;
-  }
-  .btn-icon-text:hover {
-    background: var(--btn-sec-hover);
+  .resizer:hover, .resizer.dragging {
+    background: var(--vscode-focusBorder, #007fd4);
   }
   .btn-mini {
     background: transparent;
@@ -1632,34 +1604,17 @@ class ConversationManagerProvider {
 </head>
 <body>
 
-  <!-- Top Bar -->
-  <div class="top-bar">
-    <div class="title-group">
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="opacity:0.85;">
-        <path d="M14 1H2a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h2.5l3 3 3-3H14a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1zm0 10h-4.17L7.5 13.33 5.17 11H2V2h12v9z"/>
-      </svg>
-      <span>Conversation Manager</span>
-      <span id="headerTotalBadge" class="badge-count">0</span>
-    </div>
-    <button class="btn-icon-text" id="btnRefresh">
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-        <path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/>
-        <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/>
-      </svg>
-      <span>Refresh</span>
-    </button>
-  </div>
-
-  <!-- Main 3-Pane Layout -->
+  <!-- Main 3-Pane Layout with Draggable Splitters -->
   <div class="main-layout">
 
     <!-- Pane 1: Folders Tree -->
-    <div class="pane-folders">
+    <div class="pane-folders" id="paneFolders">
       <div class="pane-header">
         <span>Explorer</span>
         <div class="pane-header-actions">
           <button class="btn-mini" id="btnExpandAll" title="Expand All">Expand</button>
           <button class="btn-mini" id="btnCollapseAll" title="Collapse All">Collapse</button>
+          <button class="btn-mini" id="btnRefresh" title="Refresh conversations">Refresh</button>
         </div>
       </div>
       <div class="folder-tree" id="folderTree"></div>
@@ -1669,8 +1624,11 @@ class ConversationManagerProvider {
       </div>
     </div>
 
+    <!-- Splitter between Pane 1 and Pane 2 -->
+    <div class="resizer" id="resizer1" title="Drag to resize"></div>
+
     <!-- Pane 2: Conversation List -->
-    <div class="pane-list">
+    <div class="pane-list" id="paneList">
       <div class="folder-overview" id="folderOverview"></div>
       <div class="search-box">
         <div class="search-input-wrapper">
@@ -1696,6 +1654,9 @@ class ConversationManagerProvider {
       </div>
       <div class="conv-list" id="convList"></div>
     </div>
+
+    <!-- Splitter between Pane 2 and Pane 3 -->
+    <div class="resizer" id="resizer2" title="Drag to resize"></div>
 
     <!-- Pane 3: Detail Preview -->
     <div class="pane-detail" id="paneDetail">
@@ -1882,7 +1843,7 @@ class ConversationManagerProvider {
         renderFolderTree();
         renderFolderOverview();
         renderConversationList();
-        document.getElementById('headerTotalBadge').innerText = String(msg.totalConversations || 0);
+        const hb = document.getElementById('headerTotalBadge'); if (hb) hb.innerText = String(msg.totalConversations || 0);
         if (!state.selectedId && state.detail) {
           state.detail = null;
           renderDetailPane();
@@ -1992,9 +1953,9 @@ class ConversationManagerProvider {
       if (node.isDriveOrRoot) {
         iconSvg = '<svg class="tree-icon drive-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 3H3V4h10v2zm1 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1zm-1 3H3v-2h10v2z"/></svg>';
       } else if (hasChildren && isExpanded) {
-        iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 14h13l.5-.5v-8l-.5-.5H8.29l-.85-.85L7 4H2l-.5.5v9l.5.5zm1-8.5h4.29l.85.85.36.15H14v1.5H2.5v-2.5zm0 3.5H14v4.5H2.5V9z"/></svg>';
+        iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 13.5h13l.5-.5v-7l-.5-.5H8.29l-.85-.85L7 4H2l-.5.5v8.5l.5.5zm1-7.5h4.29l.85.85.36.15H14V8H2.5V6zm0 3H14v3.5H2.5V9z"/></svg>';
       } else {
-        iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10l-.5-.5zm-.5 11h-12V3h4.29l.85.85.35.15H14v10z"/></svg>';
+        iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 4H7.71l-.85-.85L6.51 3h-5l-.5.5v9l.5.5h13l.5-.5v-8l-.5-.5zm-.5 9H2V4h4.29l.85.85.36.15H14v8z"/></svg>';
       }
 
       let out = '<div class="tree-item ' + (isSel ? 'active' : '') + '" style="padding-left:' + (indent + 8) + 'px" data-folder="' + escapedPath + '">' +
@@ -2042,7 +2003,7 @@ class ConversationManagerProvider {
     } else if (/^[a-zA-Z]:/.test(state.selectedFolder)) {
       iconSvg = '<svg class="overview-title-icon drive-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 3H3V4h10v2zm1 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1zm-1 3H3v-2h10v2z"/></svg>';
     } else {
-      iconSvg = '<svg class="overview-title-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10l-.5-.5zm-.5 11h-12V3h4.29l.85.85.35.15H14v10z"/></svg>';
+      iconSvg = '<svg class="overview-title-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 4H7.71l-.85-.85L6.51 3h-5l-.5.5v9l.5.5h13l.5-.5v-8l-.5-.5zm-.5 9H2V4h4.29l.85.85.36.15H14v8z"/></svg>';
     }
 
     const scopeLabel = state.selectedFolder === 'ALL'
@@ -2238,6 +2199,64 @@ class ConversationManagerProvider {
         (messagesHtml || '<div class="empty-state">No transcript messages found for this conversation.</div>') +
       '</div>';
   }
+
+  // Draggable Splitters for Resizing Columns
+  (function initResizers() {
+    const r1 = document.getElementById('resizer1');
+    const pF = document.getElementById('paneFolders');
+    const r2 = document.getElementById('resizer2');
+    const pL = document.getElementById('paneList');
+
+    try {
+      const w1 = localStorage.getItem('cm_pane1_width');
+      if (w1 && !isNaN(Number(w1))) pF.style.width = Math.max(160, Math.min(600, Number(w1))) + 'px';
+      const w2 = localStorage.getItem('cm_pane2_width');
+      if (w2 && !isNaN(Number(w2))) pL.style.width = Math.max(260, Math.min(800, Number(w2))) + 'px';
+    } catch (_) {}
+
+    function setup(resizer, targetPane, isPane1) {
+      if (!resizer || !targetPane) return;
+      let startX = 0;
+      let startWidth = 0;
+
+      function onMouseMove(e) {
+        const dx = e.clientX - startX;
+        let newW = startWidth + dx;
+        if (isPane1) {
+          newW = Math.max(160, Math.min(window.innerWidth - 450, newW));
+          targetPane.style.width = newW + 'px';
+          try { localStorage.setItem('cm_pane1_width', String(newW)); } catch (_) {}
+        } else {
+          newW = Math.max(260, Math.min(window.innerWidth - pF.offsetWidth - 250, newW));
+          targetPane.style.width = newW + 'px';
+          try { localStorage.setItem('cm_pane2_width', String(newW)); } catch (_) {}
+        }
+      }
+
+      function onMouseUp() {
+        resizer.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+      }
+
+      resizer.addEventListener('mousedown', e => {
+        e.preventDefault();
+        startX = e.clientX;
+        startWidth = targetPane.offsetWidth;
+        resizer.classList.add('dragging');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+      });
+    }
+
+    setup(r1, pF, true);
+    setup(r2, pL, false);
+  })();
+
 </script>
 </body>
 </html>`;
