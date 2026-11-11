@@ -19,6 +19,7 @@ export interface CachedConversation {
     estOutputTokens: number;
     estThinkingTokens: number;
     estTotalTokens: number;
+    cumulativeTokens: number;
     modelName?: string;
     parentConversationId?: string;
     hasTranscript: boolean;
@@ -56,9 +57,9 @@ export class ConversationManagerProvider {
     private _selectedId: string | null = null;
     private _searchQuery: string = '';
     private _searchMode: 'all' | 'title' | 'content' = 'all';
-    private _sortBy: 'recent' | 'oldest' | 'messages' | 'tokens' | 'steps' = 'recent';
+    private _sortBy: 'recent' | 'oldest' | 'messages' | 'tokens' | 'traffic' | 'steps' = 'recent';
 
-    private static readonly CACHE_VERSION = 4;
+    private static readonly CACHE_VERSION = 5;
     public static readonly CACHE_FILE = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'enhancer_conversations_cache.json');
 
     public static createOrShow(extensionUri: vscode.Uri, initialFolder?: string) {
@@ -380,6 +381,9 @@ export class ConversationManagerProvider {
                 let toolOutputChars = 0;
                 let responseChars = 0;
                 let thinkingChars = 0;
+                let currentContextChars = 0;
+                let cumulativeInputChars = 0;
+                let cumulativeOutputChars = 0;
                 let firstMsg = '';
                 let firstTime = 0;
                 const searchableChunks: string[] = [];
@@ -407,6 +411,7 @@ export class ConversationManagerProvider {
                                     const match = txt.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
                                     if (match) txt = match[1].trim();
                                     userChars += txt.length;
+                                    currentContextChars += txt.length;
                                     if (!firstMsg && txt) firstMsg = txt.replace(/\s+/g, ' ').slice(0, 180);
                                     if (txt && totalIndexedChars < MAX_INDEX_CHARS) {
                                         const chunk = txt.replace(/\s+/g, ' ').slice(0, 4000);
@@ -415,13 +420,15 @@ export class ConversationManagerProvider {
                                     }
                                 } else if (step.type === 'PLANNER_RESPONSE') {
                                     modelMsgs++;
+                                    cumulativeInputChars += currentContextChars;
+
                                     const c = typeof step.content === 'string' ? step.content : '';
                                     const th = typeof step.thinking === 'string' ? step.thinking : '';
-                                    responseChars += c.length;
-                                    thinkingChars += th.length;
+                                    let tcLen = 0;
                                     if (step.tool_calls && Array.isArray(step.tool_calls)) {
                                         toolCalls += step.tool_calls.length;
-                                        responseChars += JSON.stringify(step.tool_calls).length;
+                                        tcLen = JSON.stringify(step.tool_calls).length;
+                                        responseChars += tcLen;
                                         if (workspaces.length === 0) {
                                             for (const tc of step.tool_calls) {
                                                 const cwd = tc?.args?.Cwd;
@@ -435,6 +442,13 @@ export class ConversationManagerProvider {
                                             }
                                         }
                                     }
+                                    responseChars += c.length;
+                                    thinkingChars += th.length;
+
+                                    const outChars = c.length + th.length + tcLen;
+                                    cumulativeOutputChars += outChars;
+                                    currentContextChars += outChars;
+
                                     if (c && totalIndexedChars < MAX_INDEX_CHARS) {
                                         const chunk = c.replace(/\s+/g, ' ').slice(0, 3000);
                                         searchableChunks.push(chunk);
@@ -448,6 +462,7 @@ export class ConversationManagerProvider {
                                 } else if (step.type && toolOutputTypes.has(step.type)) {
                                     const c = typeof step.content === 'string' ? step.content : (step.output ? String(step.output) : '');
                                     toolOutputChars += c.length;
+                                    currentContextChars += c.length;
                                 }
                             } catch {}
                         }
@@ -466,6 +481,10 @@ export class ConversationManagerProvider {
                 const estInputTokens = Math.round((userChars + toolOutputChars) / 3.2);
                 const estThinkingTokens = Math.round(thinkingChars / 3.2);
                 const estOutputTokens = Math.round(responseChars / 3.2);
+                const estTotalTokens = estInputTokens + estOutputTokens + estThinkingTokens;
+                const cumulativeTokens = hasTranscript
+                    ? Math.max(estTotalTokens, Math.round((cumulativeInputChars + cumulativeOutputChars) / 3.2))
+                    : estTotalTokens;
 
                 const item: CachedConversation = {
                     id,
@@ -481,7 +500,8 @@ export class ConversationManagerProvider {
                     estInputTokens,
                     estOutputTokens,
                     estThinkingTokens,
-                    estTotalTokens: estInputTokens + estOutputTokens + estThinkingTokens,
+                    estTotalTokens,
+                    cumulativeTokens,
                     parentConversationId: summ?.trajectoryMetadata?.parentConversationId,
                     hasTranscript,
                     firstMessageSnippet: firstMsg,
@@ -672,6 +692,7 @@ export class ConversationManagerProvider {
         folderUserMsgs: number;
         folderModelMsgs: number;
         folderTotalTokens: number;
+        folderCumulativeTokens: number;
         folderTotalSteps: number;
     } {
         const currentWs = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0])
@@ -702,6 +723,7 @@ export class ConversationManagerProvider {
         let folderUserMsgs = 0;
         let folderModelMsgs = 0;
         let folderTotalTokens = 0;
+        let folderCumulativeTokens = 0;
         let folderTotalSteps = 0;
 
         for (const c of folderList) {
@@ -709,6 +731,7 @@ export class ConversationManagerProvider {
             folderUserMsgs += c.userMsgs || 0;
             folderModelMsgs += c.modelMsgs || 0;
             folderTotalTokens += c.estTotalTokens || 0;
+            folderCumulativeTokens += c.cumulativeTokens || c.estTotalTokens || 0;
             folderTotalSteps += c.stepCount || 0;
         }
 
@@ -736,6 +759,7 @@ export class ConversationManagerProvider {
             if (this._sortBy === 'oldest') return a.lastModifiedTime - b.lastModifiedTime;
             if (this._sortBy === 'messages') return (b.userMsgs + b.modelMsgs) - (a.userMsgs + a.modelMsgs);
             if (this._sortBy === 'tokens') return b.estTotalTokens - a.estTotalTokens;
+            if (this._sortBy === 'traffic') return (b.cumulativeTokens || b.estTotalTokens) - (a.cumulativeTokens || a.estTotalTokens);
             if (this._sortBy === 'steps') return b.stepCount - a.stepCount;
             return 0;
         });
@@ -770,6 +794,7 @@ export class ConversationManagerProvider {
             folderUserMsgs,
             folderModelMsgs,
             folderTotalTokens,
+            folderCumulativeTokens,
             folderTotalSteps
         };
     }
@@ -1749,8 +1774,8 @@ export class ConversationManagerProvider {
             <option value="recent">Recent</option>
             <option value="oldest">Oldest</option>
             <option value="messages">Messages</option>
-            <option value="tokens">Tokens</option>
-            <option value="steps">Steps</option>
+            <option value="tokens">Context Size</option>
+            <option value="traffic">API Traffic</option>
           </select>
         </div>
       </div>
@@ -2124,6 +2149,8 @@ export class ConversationManagerProvider {
       ? (formatNumber(userMsgs) + ' user · ' + formatNumber(aiMsgs) + ' AI')
       : 'User & Assistant';
 
+    const apiTraffic = (typeof state.folderCumulativeTokens === 'number') ? state.folderCumulativeTokens : tokens;
+
     container.innerHTML =
       '<div class="overview-header">' +
         '<div class="overview-title" title="' + escapeHtml(state.selectedFolder) + '">' +
@@ -2144,14 +2171,14 @@ export class ConversationManagerProvider {
           '<div class="m3-sub" title="' + escapeHtml(msgSub) + '">' + escapeHtml(msgSub) + '</div>' +
         '</div>' +
         '<div class="m3-stat-card">' +
-          '<div class="m3-label">Est. Tokens</div>' +
+          '<div class="m3-label">Context Memory</div>' +
           '<div class="m3-value">~' + formatNumber(tokens) + '</div>' +
-          '<div class="m3-sub">context memory</div>' +
+          '<div class="m3-sub">active context</div>' +
         '</div>' +
         '<div class="m3-stat-card">' +
-          '<div class="m3-label">Steps</div>' +
-          '<div class="m3-value">' + formatNumber(steps) + '</div>' +
-          '<div class="m3-sub">indexed turns</div>' +
+          '<div class="m3-label">API Traffic (Full)</div>' +
+          '<div class="m3-value">~' + formatNumber(apiTraffic) + '</div>' +
+          '<div class="m3-sub">9Router cumulative</div>' +
         '</div>' +
       '</div>';
   }
@@ -2270,14 +2297,14 @@ export class ConversationManagerProvider {
           '<span class="stat-sub">' + (c.userMsgs || 0) + ' user / ' + (c.modelMsgs || 0) + ' AI · ' + (c.toolCalls || 0) + ' tools</span>' +
         '</div>' +
         '<div class="stat-card">' +
-          '<span class="stat-label">Est. Tokens</span>' +
+          '<span class="stat-label">Context Memory</span>' +
           '<span class="stat-value">~' + formatNumber(c.estTotalTokens) + '</span>' +
           '<span class="stat-sub">' + formatNumber(c.estInputTokens) + ' in / ' + formatNumber(c.estOutputTokens) + ' out' + thinkingNote + '</span>' +
         '</div>' +
         '<div class="stat-card">' +
-          '<span class="stat-label">Steps</span>' +
-          '<span class="stat-value">' + c.stepCount + '</span>' +
-          '<span class="stat-sub">' + (c.hasTranscript ? 'Transcript indexed' : 'DB / archive only') + '</span>' +
+          '<span class="stat-label">API Traffic (Full)</span>' +
+          '<span class="stat-value">~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + '</span>' +
+          '<span class="stat-sub">' + (c.modelMsgs || 0) + ' requests &middot; 9Router full</span>' +
         '</div>' +
         '<div class="stat-card">' +
           '<span class="stat-label">Duration</span>' +
@@ -2289,6 +2316,7 @@ export class ConversationManagerProvider {
       '<div class="metadata-bar">' +
         '<div class="metadata-item"><b>ID:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="copy" data-copy="' + escapeHtml(c.id) + '" title="Click to copy full ID">' + escapeHtml(c.id) + '</span></div>' +
         '<div class="metadata-item"><b>Workspace:</b> <span class="meta-link" data-action="copy" data-copy="' + escapeHtml(wsStr) + '" title="' + escapeHtml(wsStr) + ' (click to copy)">' + escapeHtml(wsShort) + '</span></div>' +
+        '<div class="metadata-item"><b>Steps:</b> <span>' + c.stepCount + ' (' + (c.hasTranscript ? 'Transcript' : 'DB') + ')</span></div>' +
         '<div class="metadata-item"><b>Created:</b> <span>' + escapeHtml(createdStr) + '</span></div>' +
         '<div class="metadata-item"><b>Modified:</b> <span>' + escapeHtml(modifiedStr) + '</span></div>' +
         (c.parentConversationId ? ('<div class="metadata-item"><b>Forked from:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="jumpConv" data-id="' + escapeHtml(c.parentConversationId) + '" title="Open parent conversation">' + escapeHtml(c.parentConversationId.slice(0, 8)) + '...</span></div>') : '') +
