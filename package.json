@@ -2,7 +2,7 @@
   "name": "antigravity-enhancer",
   "displayName": "Antigravity Enhancer",
   "description": "Essential UX enhancements and native workflow patches for Google Antigravity IDE: instant clipboard paste, seamless cross-workspace switching, conversation forking, workspace chat tabs, auto-submit permission prompts, and notification focus.",
-  "version": "1.5.7",
+  "version": "1.5.8",
   "publisher": "dangphuc2470",
   "author": {
     "name": "dangphuc2470",
