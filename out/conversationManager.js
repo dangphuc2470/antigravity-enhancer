@@ -134,13 +134,18 @@ class ConversationManagerProvider {
     _normalizePath(uriOrPath) {
         try {
             let s = decodeURIComponent(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
-            if (s.startsWith('file:///'))
+            if (/^file:\/\/\/[a-zA-Z]:/i.test(s)) {
                 s = s.slice(8);
-            else if (s.startsWith('file://'))
+            }
+            else if (s.startsWith('file://')) {
                 s = s.slice(7);
+            }
             s = s.replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
             if (/^[a-zA-Z]:/.test(s)) {
                 s = s.charAt(0).toUpperCase() + s.slice(1);
+            }
+            else if (!s.startsWith('/') && !s.startsWith('(')) {
+                s = '/' + s;
             }
             while (s.length > 3 && s.endsWith('/'))
                 s = s.slice(0, -1);
@@ -148,8 +153,12 @@ class ConversationManagerProvider {
         }
         catch {
             let s = String(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
-            if (/^[a-zA-Z]:/.test(s))
+            if (/^[a-zA-Z]:/.test(s)) {
                 s = s.charAt(0).toUpperCase() + s.slice(1);
+            }
+            else if (!s.startsWith('/') && !s.startsWith('(')) {
+                s = '/' + s;
+            }
             while (s.length > 3 && s.endsWith('/'))
                 s = s.slice(0, -1);
             return s;
