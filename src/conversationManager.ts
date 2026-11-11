@@ -2018,7 +2018,7 @@ export class ConversationManagerProvider {
       </div>
       <div class="list-summary-strip" id="listSummaryStrip" style="display:none;">
         <span id="summaryCount">0 conversations</span>
-        <span id="summaryMetrics">0 msgs / ~0 tok</span>
+        <span id="summaryMetrics">0 messages / ~0 tokens</span>
       </div>
       <div class="conv-list" id="convList"></div>
     </div>
@@ -2453,7 +2453,7 @@ export class ConversationManagerProvider {
     if (isSearching) {
       strip.style.display = 'flex';
       document.getElementById('summaryCount').innerText = state.conversations.length + ' matching filter';
-      document.getElementById('summaryMetrics').innerText = formatNumber(state.filteredMessages) + ' msgs · ~' + formatNumber(state.filteredTokens) + ' tok';
+      document.getElementById('summaryMetrics').innerText = formatNumber(state.filteredMessages) + ' messages · ~' + formatNumber(state.filteredTokens) + ' tokens';
     } else {
       strip.style.display = 'none';
     }
@@ -2482,9 +2482,9 @@ export class ConversationManagerProvider {
         '<div class="conv-meta">' +
         '<span>' + wsDisplay + '</span>' +
         '<span>&middot;</span>' +
-        '<span>' + totalMsgs + ' msgs (' + (c.userMsgs || 0) + '/' + (c.modelMsgs || 0) + ')</span>' +
+        '<span>' + totalMsgs + ' messages (' + (c.userMsgs || 0) + '/' + (c.modelMsgs || 0) + ')</span>' +
         '<span>&middot;</span>' +
-        '<span>' + (state.sortBy === 'traffic' ? ('~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + ' traffic') : ('~' + formatNumber(c.estTotalTokens) + ' tok')) + '</span>' +
+        '<span>' + (state.sortBy === 'traffic' ? ('~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + ' traffic') : ('~' + formatNumber(c.estTotalTokens) + ' tokens')) + '</span>' +
         '<span style="margin-left:auto;flex-shrink:0;">' + escapeHtml(timeStr) + '</span>' +
         '</div>' +
         (snippetHighlighted ? '<div class="conv-snippet">' + snippetHighlighted + '</div>' : '') +

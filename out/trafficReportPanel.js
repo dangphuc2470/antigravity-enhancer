@@ -1058,7 +1058,7 @@ class TrafficReportPanel {
         </div>
         <div class="kpi-body">
           <span class="kpi-num" id="kpiTotalRequests">0</span>
-          <span class="kpi-detail" id="kpiAvgTokensPerReq">~0 tok / request avg</span>
+          <span class="kpi-detail" id="kpiAvgTokensPerReq">~0 tokens / request avg</span>
         </div>
       </div>
 
@@ -1330,7 +1330,7 @@ class TrafficReportPanel {
       // KPI 1: Requests
       document.getElementById('kpiTotalRequests').innerText = formatExact(totalRequests);
       const avgPerReq = totalRequests > 0 ? Math.round(totalTokens / totalRequests) : 0;
-      document.getElementById('kpiAvgTokensPerReq').innerText = '~' + formatNumber(avgPerReq) + ' tok / request avg';
+      document.getElementById('kpiAvgTokensPerReq').innerText = '~' + formatNumber(avgPerReq) + ' tokens / request avg';
 
       // KPI 2: Input
       document.getElementById('kpiInputTokens').innerText = '~' + formatNumber(totalInput);
