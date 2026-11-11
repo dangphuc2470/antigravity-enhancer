@@ -150,6 +150,16 @@ class ConversationManagerProvider {
                 case 'openTrafficReport':
                     await this._openTrafficReport();
                     break;
+                case 'backup': {
+                    const { ConversationBackupService } = require('./conversationBackup');
+                    await ConversationBackupService.backupAllConversations();
+                    break;
+                }
+                case 'import': {
+                    const { ConversationBackupService } = require('./conversationBackup');
+                    await ConversationBackupService.importConversations();
+                    break;
+                }
             }
         }, null, this._disposables);
         this._loadConversations();
@@ -2154,6 +2164,22 @@ class ConversationManagerProvider {
     const btn = ev.target.closest('[data-action="openTrafficReport"]');
     if (btn) {
       vscode.postMessage({ type: 'openTrafficReport' });
+      return;
+    }
+    const bBackup = ev.target.closest('#btnBackup');
+    if (bBackup) {
+      vscode.postMessage({ type: 'backup' });
+      return;
+    }
+    const bImport = ev.target.closest('#btnImport');
+    if (bImport) {
+      vscode.postMessage({ type: 'import' });
+      return;
+    }
+    const bRefresh = ev.target.closest('#btnRefreshOverview');
+    if (bRefresh) {
+      vscode.postMessage({ type: 'refresh' });
+      return;
     }
   });
 
@@ -2303,8 +2329,10 @@ class ConversationManagerProvider {
           iconSvg +
           '<span class="overview-name">' + escapeHtml(fName) + '</span>' +
         '</div>' +
-        '<div style="display:flex;align-items:center;gap:6px;">' +
+        '<div style="display:flex;align-items:center;gap:5px;">' +
           '<span class="overview-scope-badge">' + scopeLabel + '</span>' +
+          '<button class="btn-mini" id="btnBackup" title="Backup all conversations to .zip archive" style="padding:1.5px 6px;font-size:10.5px;">Backup</button>' +
+          '<button class="btn-mini" id="btnImport" title="Import conversations from .zip archive (deduplicates existing)" style="padding:1.5px 6px;font-size:10.5px;">Import</button>' +
           '<button class="btn-mini" id="btnRefreshOverview" title="Refresh conversations" style="padding:1.5px 6px;font-size:10.5px;">Refresh</button>' +
         '</div>' +
       '</div>' +

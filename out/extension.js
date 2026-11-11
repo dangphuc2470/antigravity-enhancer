@@ -823,6 +823,12 @@ function activate(context) {
         await explorerProvider.refresh();
     }), vscode.commands.registerCommand('antigravity.openTrafficReport', () => {
         trafficReportPanel_1.TrafficReportPanel.createOrShow(context.extensionUri);
+    }), vscode.commands.registerCommand('antigravity.backupConversations', async () => {
+        const { ConversationBackupService } = require('./conversationBackup');
+        await ConversationBackupService.backupAllConversations();
+    }), vscode.commands.registerCommand('antigravity.importConversations', async () => {
+        const { ConversationBackupService } = require('./conversationBackup');
+        await ConversationBackupService.importConversations();
     }));
     // Register external file opener for binaries, office, media, archives
     (0, externalOpener_1.registerExternalOpener)(context);

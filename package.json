@@ -86,6 +86,18 @@
         "command": "antigravity.openTrafficReport",
         "category": "Antigravity Enhancer",
         "title": "Open API Traffic & Token Report"
+      },
+      {
+        "command": "antigravity.backupConversations",
+        "category": "Antigravity Enhancer",
+        "title": "Backup All Conversations (.zip)",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "antigravity.importConversations",
+        "category": "Antigravity Enhancer",
+        "title": "Import Conversations (.zip)",
+        "icon": "$(cloud-upload)"
       }
     ],
     "viewsContainers": {
@@ -141,6 +153,16 @@
           "command": "antigravity.openConversationManager",
           "when": "view == antigravity.conversationExplorer",
           "group": "navigation@2"
+        },
+        {
+          "command": "antigravity.backupConversations",
+          "when": "view == antigravity.conversationExplorer",
+          "group": "navigation@3"
+        },
+        {
+          "command": "antigravity.importConversations",
+          "when": "view == antigravity.conversationExplorer",
+          "group": "navigation@4"
         }
       ],
       "explorer/context": [
