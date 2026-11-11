@@ -57,7 +57,7 @@ export class ConversationManagerProvider {
     private _searchMode: 'all' | 'title' | 'content' = 'all';
     private _sortBy: 'recent' | 'oldest' | 'messages' | 'tokens' | 'steps' = 'recent';
 
-    private static readonly CACHE_VERSION = 3;
+    private static readonly CACHE_VERSION = 4;
     private static readonly CACHE_FILE = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'enhancer_conversations_cache.json');
 
     public static createOrShow(extensionUri: vscode.Uri) {
@@ -163,18 +163,19 @@ export class ConversationManagerProvider {
 
     private _normalizePath(uriOrPath: string): string {
         try {
-            let s = decodeURIComponent(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/');
+            let s = decodeURIComponent(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
             if (s.startsWith('file:///')) s = s.slice(8);
             else if (s.startsWith('file://')) s = s.slice(7);
-            s = s.replace(/^["']+|["']+$/g, '').trim();
+            s = s.replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
             if (/^[a-zA-Z]:/.test(s)) {
                 s = s.charAt(0).toUpperCase() + s.slice(1);
             }
             while (s.length > 3 && s.endsWith('/')) s = s.slice(0, -1);
             return s;
         } catch {
-            let s = String(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/');
+            let s = String(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
             if (/^[a-zA-Z]:/.test(s)) s = s.charAt(0).toUpperCase() + s.slice(1);
+            while (s.length > 3 && s.endsWith('/')) s = s.slice(0, -1);
             return s;
         }
     }
@@ -186,7 +187,12 @@ export class ConversationManagerProvider {
                 const raw = JSON.parse(fs.readFileSync(ConversationManagerProvider.CACHE_FILE, 'utf8'));
                 if (raw && !Array.isArray(raw) && raw.version === ConversationManagerProvider.CACHE_VERSION && Array.isArray(raw.items)) {
                     for (const item of raw.items) {
-                        if (item && item.id) map.set(item.id, item);
+                        if (item && item.id) {
+                            if (Array.isArray(item.workspaces)) {
+                                item.workspaces = item.workspaces.map((w: string) => this._normalizePath(w));
+                            }
+                            map.set(item.id, item);
+                        }
                     }
                 }
             }
@@ -459,12 +465,13 @@ export class ConversationManagerProvider {
         if (folderLower === '(no workspace)') {
             return conv.workspaces.length === 0;
         }
+        const target = this._normalizePath(folderLower).toLowerCase();
         return conv.workspaces.some(w => {
-            const wl = w.toLowerCase();
+            const wl = this._normalizePath(w).toLowerCase();
             if (includeSub) {
-                return wl === folderLower || wl.startsWith(folderLower.endsWith('/') ? folderLower : folderLower + '/');
+                return wl === target || wl.startsWith(target.endsWith('/') ? target : target + '/');
             }
-            return wl === folderLower;
+            return wl === target;
         });
     }
 
@@ -1059,6 +1066,8 @@ export class ConversationManagerProvider {
   .tree-chevron {
     width: 14px;
     height: 14px;
+    min-width: 14px;
+    min-height: 14px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1070,11 +1079,30 @@ export class ConversationManagerProvider {
   .tree-chevron.expanded svg {
     transform: rotate(90deg);
   }
+  .tree-chevron svg {
+    width: 10px;
+    height: 10px;
+    min-width: 10px;
+    min-height: 10px;
+    aspect-ratio: 1 / 1;
+    display: block;
+    flex-shrink: 0;
+  }
   .tree-icon {
     width: 14px;
     height: 14px;
+    min-width: 14px;
+    min-height: 14px;
+    aspect-ratio: 1 / 1;
     flex-shrink: 0;
     opacity: 0.85;
+    display: inline-block;
+  }
+  .folder-icon {
+    color: #e5a93c;
+  }
+  .drive-icon {
+    color: #4daafc;
   }
   .tree-label {
     white-space: nowrap;
@@ -1810,7 +1838,7 @@ export class ConversationManagerProvider {
     const isAll = state.selectedFolder === 'ALL';
     html += '<div class="tree-item ' + (isAll ? 'active' : '') + '" data-folder="ALL">' +
       '<span class="tree-chevron"></span>' +
-      '<svg class="tree-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M14 4.5V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h4.5l2 2H13a1 1 0 0 1 1 1z"/></svg>' +
+      '<svg class="tree-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 2H2a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1zm-1 10H3V4h10v8zM5 6h6v1H5V6zm0 3h6v1H5V9z"/></svg>' +
       '<span class="tree-label">All Conversations</span>' +
       '<span class="tree-badge">' + state.totalConversations + '</span>' +
       '</div>';
@@ -1819,7 +1847,7 @@ export class ConversationManagerProvider {
       const isCur = state.selectedFolder === 'CURRENT';
       html += '<div class="tree-item ' + (isCur ? 'active' : '') + '" data-folder="CURRENT" title="' + escapeHtml(state.currentWorkspace) + '">' +
         '<span class="tree-chevron"></span>' +
-        '<svg class="tree-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M11.251.068a.5.5 0 0 1 .42.58L10.477 6.5H14a.5.5 0 0 1 .372.832l-9.5 10.5a.5.5 0 0 1-.84-.528l1.2-5.804H1.5a.5.5 0 0 1-.372-.832l9.5-10.5a.5.5 0 0 1 .623-.1z"/></svg>' +
+        '<svg class="tree-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.251.068a.5.5 0 0 1 .42.58L10.477 6.5H14a.5.5 0 0 1 .372.832l-9.5 10.5a.5.5 0 0 1-.84-.528l1.2-5.804H1.5a.5.5 0 0 1-.372-.832l9.5-10.5a.5.5 0 0 1 .623-.1z"/></svg>' +
         '<span class="tree-label">Current Workspace</span>' +
         '<span class="tree-badge">' + (state.currentWorkspaceCount || 0) + '</span>' +
         '</div>';
@@ -1833,11 +1861,20 @@ export class ConversationManagerProvider {
       const escapedPath = escapeHtml(node.fullPath);
       const count = state.includeSubfolders ? node.totalCount : node.directCount;
 
+      let iconSvg = '';
+      if (node.isDriveOrRoot) {
+        iconSvg = '<svg class="tree-icon drive-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 3H3V4h10v2zm1 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1zm-1 3H3v-2h10v2z"/></svg>';
+      } else if (hasChildren && isExpanded) {
+        iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 14h13l.5-.5v-8l-.5-.5H8.29l-.85-.85L7 4H2l-.5.5v9l.5.5zm1-8.5h4.29l.85.85.36.15H14v1.5H2.5v-2.5zm0 3.5H14v4.5H2.5V9z"/></svg>';
+      } else {
+        iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10l-.5-.5zm-.5 11h-12V3h4.29l.85.85.35.15H14v10z"/></svg>';
+      }
+
       let out = '<div class="tree-item ' + (isSel ? 'active' : '') + '" style="padding-left:' + (indent + 8) + 'px" data-folder="' + escapedPath + '">' +
         '<span class="tree-chevron ' + (isExpanded ? 'expanded' : '') + '" ' + (hasChildren ? 'data-toggle="' + escapedPath + '"' : '') + '>' +
         (hasChildren ? '<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3.5l5 4.5-5 4.5V3.5z"/></svg>' : '') +
         '</span>' +
-        '<svg class="tree-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M14 4.5V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h4.5l2 2H13a1 1 0 0 1 1 1z"/></svg>' +
+        iconSvg +
         '<span class="tree-label" title="' + escapedPath + '">' + escapeHtml(node.name) + '</span>' +
         '<span class="tree-badge">' + count + '</span>' +
         '</div>';
