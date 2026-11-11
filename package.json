@@ -149,18 +149,6 @@
       }
     ],
     "menus": {
-      "view/title": [
-        {
-          "command": "antigravity.importConversations",
-          "when": "view == antigravity.conversationExplorer",
-          "group": "navigation@1"
-        },
-        {
-          "command": "antigravity.exportConversations",
-          "when": "view == antigravity.conversationExplorer",
-          "group": "navigation@2"
-        }
-      ],
       "explorer/context": [
         {
           "command": "antigravity-enhancer.openExternal",

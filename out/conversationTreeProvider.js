@@ -109,6 +109,16 @@ class ConversationExplorerViewProvider {
                 case 'refresh':
                     await this.refresh();
                     break;
+                case 'export': {
+                    const { ConversationBackupService } = require('./conversationBackup');
+                    await ConversationBackupService.backupAllConversations();
+                    break;
+                }
+                case 'import': {
+                    const { ConversationBackupService } = require('./conversationBackup');
+                    await ConversationBackupService.importConversations();
+                    break;
+                }
                 case 'moveFolder':
                     await this._moveFolderConversations(message.folder);
                     break;
@@ -286,12 +296,7 @@ class ConversationExplorerViewProvider {
     ::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.6)); }
 
     .pane-header {
-      padding: 6px 10px;
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.4px;
-      color: var(--muted);
+      padding: 5px 8px;
       border-bottom: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
@@ -475,8 +480,11 @@ class ConversationExplorerViewProvider {
 </head>
 <body>
   <div class="pane-header">
-    <span>Explorer</span>
-    <div class="pane-header-actions">
+    <div class="pane-header-actions left">
+      <button class="btn-mini" id="btnImport" title="Import conversations from .zip archive">Import</button>
+      <button class="btn-mini" id="btnExport" title="Export all conversations to .zip archive">Export</button>
+    </div>
+    <div class="pane-header-actions right">
       <button class="btn-mini" id="btnExpandAll" title="Expand All">Expand</button>
       <button class="btn-mini" id="btnCollapseAll" title="Collapse All">Collapse</button>
       <button class="btn-mini" id="btnRefresh" title="Refresh conversations">Refresh</button>
@@ -626,6 +634,14 @@ class ConversationExplorerViewProvider {
 
     document.getElementById('btnRefresh').addEventListener('click', () => {
       vscode.postMessage({ type: 'refresh' });
+    });
+
+    document.getElementById('btnImport').addEventListener('click', () => {
+      vscode.postMessage({ type: 'import' });
+    });
+
+    document.getElementById('btnExport').addEventListener('click', () => {
+      vscode.postMessage({ type: 'export' });
     });
 
     window.addEventListener('message', event => {
