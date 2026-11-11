@@ -76,6 +76,24 @@ class ConversationManagerProvider {
         if (initialFolder) {
             this._selectedFolder = initialFolder;
         }
+        else {
+            try {
+                const { ConversationExplorerViewProvider } = require('./conversationTreeProvider');
+                const exp = ConversationExplorerViewProvider.currentInstance;
+                if (exp && exp.selectedFolder) {
+                    this._selectedFolder = exp.selectedFolder;
+                }
+            }
+            catch (_) { }
+        }
+        try {
+            const { ConversationExplorerViewProvider } = require('./conversationTreeProvider');
+            const exp = ConversationExplorerViewProvider.currentInstance;
+            if (exp && typeof exp.includeSubfolders === 'boolean') {
+                this._includeSubfolders = exp.includeSubfolders;
+            }
+        }
+        catch (_) { }
         this._updateHtml();
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
         this._panel.webview.onDidReceiveMessage(async (message) => {
@@ -284,13 +302,12 @@ class ConversationManagerProvider {
             }
             const cachedMap = this._readDiskCache();
             const result = [];
-            const toolOutputTypes = new Set([
-                'RUN_COMMAND',
-                'VIEW_FILE',
-                'CODE_ACTION',
-                'LIST_DIRECTORY',
-                'GREP_SEARCH',
-                'ASK_QUESTION'
+            const systemMetaTypes = new Set([
+                'CONVERSATION_HISTORY',
+                'KNOWLEDGE_ARTIFACTS',
+                'SYSTEM_MESSAGE',
+                'GENERIC',
+                'ERROR_MESSAGE'
             ]);
             for (const id of idSet) {
                 const summ = summariesMap.get(id);
@@ -388,12 +405,13 @@ class ConversationManagerProvider {
                                 }
                                 if (step.type === 'USER_INPUT') {
                                     userMsgs++;
-                                    let txt = typeof step.content === 'string' ? step.content : '';
-                                    const match = txt.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
+                                    const rawTxt = typeof step.content === 'string' ? step.content : '';
+                                    let txt = rawTxt;
+                                    const match = rawTxt.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
                                     if (match)
                                         txt = match[1].trim();
                                     userChars += txt.length;
-                                    currentContextChars += txt.length;
+                                    currentContextChars += rawTxt.length;
                                     if (!firstMsg && txt)
                                         firstMsg = txt.replace(/\s+/g, ' ').slice(0, 180);
                                     if (txt && totalIndexedChars < MAX_INDEX_CHARS) {
@@ -402,9 +420,14 @@ class ConversationManagerProvider {
                                         totalIndexedChars += chunk.length;
                                     }
                                 }
+                                else if (step.type === 'CHECKPOINT') {
+                                    const c = typeof step.content === 'string' ? step.content : '';
+                                    currentContextChars = c.length;
+                                }
                                 else if (step.type === 'PLANNER_RESPONSE') {
                                     modelMsgs++;
-                                    cumulativeInputChars += currentContextChars;
+                                    // Base overhead (~12k chars ~3.7k tokens) accounts for system instructions and tool definitions per request
+                                    cumulativeInputChars += (12000 + currentContextChars);
                                     const c = typeof step.content === 'string' ? step.content : '';
                                     const th = typeof step.thinking === 'string' ? step.thinking : '';
                                     let tcLen = 0;
@@ -441,7 +464,11 @@ class ConversationManagerProvider {
                                         totalIndexedChars += thChunk.length;
                                     }
                                 }
-                                else if (step.type && toolOutputTypes.has(step.type)) {
+                                else if (step.type && systemMetaTypes.has(step.type)) {
+                                    const c = typeof step.content === 'string' ? step.content : '';
+                                    currentContextChars += c.length;
+                                }
+                                else if (step.type) {
                                     const c = typeof step.content === 'string' ? step.content : (step.output ? String(step.output) : '');
                                     toolOutputChars += c.length;
                                     currentContextChars += c.length;
@@ -756,6 +783,7 @@ class ConversationManagerProvider {
             folderUserMsgs: filtered.folderUserMsgs,
             folderModelMsgs: filtered.folderModelMsgs,
             folderTotalTokens: filtered.folderTotalTokens,
+            folderCumulativeTokens: filtered.folderCumulativeTokens,
             folderTotalSteps: filtered.folderTotalSteps,
             totalConversations: this._conversations.length,
             selectedId: this._selectedId,
@@ -780,6 +808,7 @@ class ConversationManagerProvider {
             folderUserMsgs: filtered.folderUserMsgs,
             folderModelMsgs: filtered.folderModelMsgs,
             folderTotalTokens: filtered.folderTotalTokens,
+            folderCumulativeTokens: filtered.folderCumulativeTokens,
             folderTotalSteps: filtered.folderTotalSteps,
             selectedId: this._selectedId
         });
@@ -1609,6 +1638,7 @@ class ConversationManagerProvider {
     folderUserMsgs: 0,
     folderModelMsgs: 0,
     folderTotalTokens: 0,
+    folderCumulativeTokens: 0,
     folderTotalSteps: 0,
     totalConversations: 0,
     currentWorkspace: '',
@@ -1899,7 +1929,7 @@ class ConversationManagerProvider {
         '<span>&middot;</span>' +
         '<span>' + totalMsgs + ' msgs (' + (c.userMsgs || 0) + '/' + (c.modelMsgs || 0) + ')</span>' +
         '<span>&middot;</span>' +
-        '<span>~' + formatNumber(c.estTotalTokens) + ' tok</span>' +
+        '<span>' + (state.sortBy === 'traffic' ? ('~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + ' traffic') : ('~' + formatNumber(c.estTotalTokens) + ' tok')) + '</span>' +
         '<span style="margin-left:auto;flex-shrink:0;">' + escapeHtml(timeStr) + '</span>' +
         '</div>' +
         (snippetHighlighted ? '<div class="conv-snippet">' + snippetHighlighted + '</div>' : '') +
@@ -2070,5 +2100,5 @@ class ConversationManagerProvider {
     }
 }
 exports.ConversationManagerProvider = ConversationManagerProvider;
-ConversationManagerProvider.CACHE_VERSION = 5;
+ConversationManagerProvider.CACHE_VERSION = 6;
 ConversationManagerProvider.CACHE_FILE = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'enhancer_conversations_cache.json');

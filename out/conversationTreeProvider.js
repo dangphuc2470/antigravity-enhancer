@@ -21,8 +21,18 @@ class ConversationExplorerViewProvider {
         this._conversations = conversations;
         this._sendState();
     }
+    get selectedFolder() {
+        return this._selectedFolder;
+    }
+    get includeSubfolders() {
+        return this._includeSubfolders;
+    }
     setSelectedFolder(folder) {
         this._selectedFolder = folder;
+        this._sendState();
+    }
+    setIncludeSubfolders(val) {
+        this._includeSubfolders = val;
         this._sendState();
     }
     async refresh() {

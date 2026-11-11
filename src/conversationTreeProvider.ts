@@ -27,8 +27,21 @@ export class ConversationExplorerViewProvider implements vscode.WebviewViewProvi
         this._sendState();
     }
 
+    public get selectedFolder(): string {
+        return this._selectedFolder;
+    }
+
+    public get includeSubfolders(): boolean {
+        return this._includeSubfolders;
+    }
+
     public setSelectedFolder(folder: string) {
         this._selectedFolder = folder;
+        this._sendState();
+    }
+
+    public setIncludeSubfolders(val: boolean) {
+        this._includeSubfolders = val;
         this._sendState();
     }
 

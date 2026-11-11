@@ -793,9 +793,27 @@ function activate(context) {
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(conversationTreeProvider_1.ConversationExplorerViewProvider.viewType, explorerProvider, {
         webviewOptions: { retainContextWhenHidden: true }
     }));
-    context.subscriptions.push(vscode.commands.registerCommand('antigravity-enhancer.apply', () => applyFix(false)), vscode.commands.registerCommand('antigravity-enhancer.remove', () => removeFix()), vscode.commands.registerCommand('antigravity-enhancer.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('agi-chat-fix.apply', () => applyFix(false)), vscode.commands.registerCommand('agi-chat-fix.remove', () => removeFix()), vscode.commands.registerCommand('agi-chat-fix.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('antigravity-clipboard-fix.apply', () => applyFix(false)), vscode.commands.registerCommand('antigravity-clipboard-fix.remove', () => removeFix()), vscode.commands.registerCommand('antigravity-clipboard-fix.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('antigravity.openConversationManager', (folder) => {
+    context.subscriptions.push(vscode.commands.registerCommand('antigravity-enhancer.apply', () => applyFix(false)), vscode.commands.registerCommand('antigravity-enhancer.remove', () => removeFix()), vscode.commands.registerCommand('antigravity-enhancer.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('agi-chat-fix.apply', () => applyFix(false)), vscode.commands.registerCommand('agi-chat-fix.remove', () => removeFix()), vscode.commands.registerCommand('agi-chat-fix.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('antigravity-clipboard-fix.apply', () => applyFix(false)), vscode.commands.registerCommand('antigravity-clipboard-fix.remove', () => removeFix()), vscode.commands.registerCommand('antigravity-clipboard-fix.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('antigravity.openConversationManager', async (folder) => {
+        try {
+            await vscode.commands.executeCommand('antigravity.conversationExplorer.focus');
+        }
+        catch {
+            try {
+                await vscode.commands.executeCommand('workbench.view.extension.antigravity-conversations');
+            }
+            catch { }
+        }
         conversationManager_1.ConversationManagerProvider.createOrShow(context.extensionUri, typeof folder === 'string' ? folder : undefined);
-    }), vscode.commands.registerCommand('antigravity-enhancer.openConversationManager', (folder) => {
+    }), vscode.commands.registerCommand('antigravity-enhancer.openConversationManager', async (folder) => {
+        try {
+            await vscode.commands.executeCommand('antigravity.conversationExplorer.focus');
+        }
+        catch {
+            try {
+                await vscode.commands.executeCommand('workbench.view.extension.antigravity-conversations');
+            }
+            catch { }
+        }
         conversationManager_1.ConversationManagerProvider.createOrShow(context.extensionUri, typeof folder === 'string' ? folder : undefined);
     }), vscode.commands.registerCommand('antigravity.selectConversationFolder', (folder) => {
         explorerProvider.setSelectedFolder(folder);
