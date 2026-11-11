@@ -1888,6 +1888,94 @@ export class ConversationManagerProvider {
     background: var(--vscode-menu-separatorBackground, var(--border, rgba(255, 255, 255, 0.08)));
     margin: 4px 0;
   }
+
+  /* In-Conversation Find Widget (Ctrl+F) */
+  .find-widget {
+    position: fixed;
+    top: 16px;
+    right: 28px;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    background: var(--vscode-editorWidget-background, #252526);
+    border: 1px solid var(--vscode-editorWidget-border, #454545);
+    border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+    padding: 4px 6px;
+    gap: 4px;
+    font-size: 12px;
+    user-select: none;
+    animation: findSlideIn 0.15s ease-out;
+  }
+  @keyframes findSlideIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .find-input-wrap {
+    display: flex;
+    align-items: center;
+    background: var(--vscode-input-background, #3c3c3c);
+    border: 1px solid var(--vscode-input-border, transparent);
+    border-radius: 4px;
+    padding: 3px 8px;
+    gap: 6px;
+    width: 240px;
+  }
+  .find-input-wrap:focus-within {
+    border-color: var(--accent, #007acc);
+  }
+  .find-input-wrap input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--vscode-input-foreground, #ffffff);
+    font-family: inherit;
+    font-size: 12px;
+    width: 100%;
+  }
+  .find-count {
+    font-size: 11px;
+    color: var(--muted, #888888);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .find-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--fg, #cccccc);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    transition: background 0.1s;
+  }
+  .find-btn:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1));
+  }
+  .find-btn.active {
+    background: var(--accent, #007acc);
+    color: #ffffff;
+  }
+  .find-btn.close-btn {
+    font-size: 16px;
+    line-height: 1;
+  }
+  mark.find-match {
+    background-color: rgba(234, 92, 0, 0.45);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+  mark.find-match.active-match {
+    background-color: #f38518;
+    color: #ffffff;
+    box-shadow: 0 0 0 2px #ff9800;
+  }
 </style>
 </head>
 <body>
@@ -1932,6 +2020,21 @@ export class ConversationManagerProvider {
       <div class="empty-state">Select a conversation to view message statistics, token breakdown, and transcript</div>
     </div>
 
+  </div>
+
+  <div id="findWidget" class="find-widget" style="display:none;">
+    <div class="find-input-wrap">
+      <input type="text" id="findInput" placeholder="Find in messages (Enter = next)..." spellcheck="false">
+      <span class="find-count" id="findCount">0 of 0</span>
+    </div>
+    <button class="find-btn" id="findPrevBtn" title="Previous match (Shift+Enter)">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/><path d="M4.5 13.5l4-4 4 4"/></svg>
+    </button>
+    <button class="find-btn" id="findNextBtn" title="Next match (Enter)">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M4.5 2.5l4 4 4-4"/></svg>
+    </button>
+    <button class="find-btn toggle-btn" id="findCaseBtn" title="Match Case (Alt+C)">Aa</button>
+    <button class="find-btn close-btn" id="findCloseBtn" title="Close (Escape)">&times;</button>
   </div>
 
   <div id="contextBackdrop" class="context-backdrop" style="display:none;"></div>
@@ -2123,6 +2226,8 @@ export class ConversationManagerProvider {
       vscode.postMessage({ type: 'delete', id });
     } else if (action === 'openTrafficReport') {
       vscode.postMessage({ type: 'openTrafficReport' });
+    } else if (action === 'openFind') {
+      openFindWidget();
     } else if (action === 'copy') {
       const text = btn.getAttribute('data-copy') || '';
       vscode.postMessage({ type: 'copy', text });
@@ -2421,6 +2526,7 @@ export class ConversationManagerProvider {
         '<div class="detail-title" title="' + escapeHtml(c.title) + '">' + escapeHtml(c.title) + '</div>' +
         '<div class="detail-actions">' +
           '<button class="btn-primary" data-action="openInChat" data-id="' + escapeHtml(c.id) + '">Open in Chat</button>' +
+          '<button class="btn-secondary" data-action="openFind" title="Find in conversation (Ctrl+F)">Find</button>' +
           '<button class="btn-secondary" data-action="openTranscriptLog" data-id="' + escapeHtml(c.id) + '">View Log</button>' +
           '<button class="btn-secondary" data-action="rename" data-id="' + escapeHtml(c.id) + '" data-title="' + escapeHtml(c.title) + '">Rename</button>' +
           '<button class="btn-secondary" data-action="move" data-id="' + escapeHtml(c.id) + '">Move...</button>' +
@@ -2470,6 +2576,10 @@ export class ConversationManagerProvider {
       '<div class="messages-container">' +
         (messagesHtml || '<div class="empty-state">No transcript messages found for this conversation.</div>') +
       '</div>';
+
+    if (findState.isOpen && findState.query) {
+      setTimeout(performFind, 60);
+    }
   }
 
   // Draggable Splitter for Resizing Columns
@@ -2518,6 +2628,214 @@ export class ConversationManagerProvider {
     if (ev.target && ev.target.closest('#btnRefreshOverview')) {
       vscode.postMessage({ type: 'refresh' });
     }
+  });
+
+  // ==========================================
+  // In-Conversation Find Widget Engine (Ctrl+F)
+  // ==========================================
+  let findState = {
+    isOpen: false,
+    query: '',
+    matchCase: false,
+    matches: [],
+    activeIndex: -1
+  };
+
+  function clearFindHighlights() {
+    const marks = Array.from(document.querySelectorAll('#paneDetail mark.find-match'));
+    for (const mark of marks) {
+      const parent = mark.parentNode;
+      if (parent) {
+        parent.replaceChild(document.createTextNode(mark.textContent || ''), mark);
+        parent.normalize();
+      }
+    }
+    findState.matches = [];
+    findState.activeIndex = -1;
+    updateFindCount();
+  }
+
+  function updateFindCount() {
+    const el = document.getElementById('findCount');
+    if (!el) return;
+    if (!findState.query) {
+      el.textContent = '0 of 0';
+    } else if (findState.matches.length === 0) {
+      el.textContent = 'No results';
+    } else {
+      el.textContent = (findState.activeIndex + 1) + ' of ' + findState.matches.length;
+    }
+  }
+
+  function jumpToMatch(index) {
+    if (findState.matches.length === 0) return;
+    if (findState.activeIndex >= 0 && findState.activeIndex < findState.matches.length) {
+      findState.matches[findState.activeIndex].classList.remove('active-match');
+    }
+    findState.activeIndex = (index + findState.matches.length) % findState.matches.length;
+    const target = findState.matches[findState.activeIndex];
+    if (target) {
+      target.classList.add('active-match');
+      const details = target.closest('details');
+      if (details) details.open = true;
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    updateFindCount();
+  }
+
+  function performFind() {
+    clearFindHighlights();
+    const q = findState.query;
+    if (!q) return;
+
+    const container = document.querySelector('#paneDetail .messages-container') || document.getElementById('paneDetail');
+    if (!container) return;
+
+    const textNodes = [];
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode: node => {
+          if (!node.textContent || !node.textContent.trim()) return NodeFilter.FILTER_REJECT;
+          if (node.parentElement && node.parentElement.closest('#findWidget, .stat-card, .detail-actions, script, style')) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      }
+    );
+
+    let n;
+    while (n = walker.nextNode()) {
+      textNodes.push(n);
+    }
+
+    const matches = [];
+    const searchTarget = findState.matchCase ? q : q.toLowerCase();
+
+    for (const node of textNodes) {
+      const text = node.textContent || '';
+      const compareText = findState.matchCase ? text : text.toLowerCase();
+      let index = compareText.indexOf(searchTarget);
+      if (index === -1) continue;
+
+      const parent = node.parentNode;
+      if (!parent) continue;
+
+      let remainingNode = node;
+      while (index !== -1) {
+        const matchNode = remainingNode.splitText(index);
+        remainingNode = matchNode.splitText(q.length);
+
+        const mark = document.createElement('mark');
+        mark.className = 'find-match';
+        mark.textContent = matchNode.textContent;
+
+        parent.replaceChild(mark, matchNode);
+        matches.push(mark);
+
+        const comp = findState.matchCase ? (remainingNode.textContent || '') : (remainingNode.textContent || '').toLowerCase();
+        index = comp.indexOf(searchTarget);
+      }
+    }
+
+    findState.matches = matches;
+    if (matches.length > 0) {
+      jumpToMatch(0);
+    } else {
+      updateFindCount();
+    }
+  }
+
+  function openFindWidget() {
+    const widget = document.getElementById('findWidget');
+    const input = document.getElementById('findInput');
+    if (!widget || !input) return;
+
+    widget.style.display = 'flex';
+    findState.isOpen = true;
+
+    const sel = window.getSelection()?.toString().trim();
+    if (sel && sel.length < 80) {
+      input.value = sel;
+      findState.query = sel;
+    }
+    input.focus();
+    input.select();
+    if (input.value) {
+      performFind();
+    }
+  }
+
+  function closeFindWidget() {
+    const widget = document.getElementById('findWidget');
+    if (widget) widget.style.display = 'none';
+    findState.isOpen = false;
+    clearFindHighlights();
+  }
+
+  window.addEventListener('keydown', ev => {
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'f' || ev.key === 'F')) {
+      ev.preventDefault();
+      openFindWidget();
+      return;
+    }
+
+    if (ev.key === 'F3') {
+      ev.preventDefault();
+      if (!findState.isOpen) {
+        openFindWidget();
+      } else if (ev.shiftKey) {
+        jumpToMatch(findState.activeIndex - 1);
+      } else {
+        jumpToMatch(findState.activeIndex + 1);
+      }
+      return;
+    }
+
+    if (ev.key === 'Escape' && findState.isOpen) {
+      ev.preventDefault();
+      closeFindWidget();
+      return;
+    }
+  });
+
+  document.getElementById('findInput').addEventListener('input', ev => {
+    findState.query = ev.target.value;
+    performFind();
+  });
+
+  document.getElementById('findInput').addEventListener('keydown', ev => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      if (ev.shiftKey) {
+        jumpToMatch(findState.activeIndex - 1);
+      } else {
+        jumpToMatch(findState.activeIndex + 1);
+      }
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault();
+      closeFindWidget();
+    }
+  });
+
+  document.getElementById('findNextBtn').addEventListener('click', () => {
+    jumpToMatch(findState.activeIndex + 1);
+  });
+
+  document.getElementById('findPrevBtn').addEventListener('click', () => {
+    jumpToMatch(findState.activeIndex - 1);
+  });
+
+  document.getElementById('findCaseBtn').addEventListener('click', () => {
+    findState.matchCase = !findState.matchCase;
+    document.getElementById('findCaseBtn').classList.toggle('active', findState.matchCase);
+    performFind();
+  });
+
+  document.getElementById('findCloseBtn').addEventListener('click', () => {
+    closeFindWidget();
   });
 
 </script>
