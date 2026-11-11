@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import { registerExternalOpener } from './externalOpener';
 import { ConversationManagerProvider } from './conversationManager';
+import { ConversationTreeProvider } from './conversationTreeProvider';
 
 // Unique marker embedded in the patched code
 const PATCH_MARKER = '/* agy-chat-fixed */';
@@ -786,12 +787,28 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('antigravity-clipboard-fix.apply', () => applyFix(false)),
         vscode.commands.registerCommand('antigravity-clipboard-fix.remove', () => removeFix()),
         vscode.commands.registerCommand('antigravity-clipboard-fix.fixChecksums', () => fixChecksumsOnly()),
-        vscode.commands.registerCommand('antigravity.openConversationManager', () => {
-            ConversationManagerProvider.createOrShow(context.extensionUri);
+        vscode.commands.registerCommand('antigravity.openConversationManager', (folder?: string) => {
+            ConversationManagerProvider.createOrShow(context.extensionUri, typeof folder === 'string' ? folder : undefined);
         }),
-        vscode.commands.registerCommand('antigravity-enhancer.openConversationManager', () => {
-            ConversationManagerProvider.createOrShow(context.extensionUri);
+        vscode.commands.registerCommand('antigravity-enhancer.openConversationManager', (folder?: string) => {
+            ConversationManagerProvider.createOrShow(context.extensionUri, typeof folder === 'string' ? folder : undefined);
+        }),
+        vscode.commands.registerCommand('antigravity.selectConversationFolder', (folder: string) => {
+            ConversationManagerProvider.createOrShow(context.extensionUri, folder);
+        }),
+        vscode.commands.registerCommand('antigravity.refreshConversationTree', async () => {
+            if (ConversationManagerProvider.currentInstance) {
+                await ConversationManagerProvider.currentInstance.reload();
+            } else {
+                treeProvider.refresh();
+            }
         })
+    );
+
+    // Register Conversation Explorer Tree Provider in Activity Bar
+    const treeProvider = new ConversationTreeProvider(context.extensionUri);
+    context.subscriptions.push(
+        vscode.window.registerTreeDataProvider('antigravity.conversationExplorer', treeProvider)
     );
 
     // Register external file opener for binaries, office, media, archives

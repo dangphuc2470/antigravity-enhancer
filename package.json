@@ -28,7 +28,19 @@
       {
         "command": "antigravity.openConversationManager",
         "category": "Antigravity Enhancer",
-        "title": "Open Conversation Manager"
+        "title": "Open Conversation Manager",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "antigravity.refreshConversationTree",
+        "category": "Antigravity Enhancer",
+        "title": "Refresh Explorer",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "antigravity.selectConversationFolder",
+        "category": "Antigravity Enhancer",
+        "title": "Select Conversation Folder"
       },
       {
         "command": "antigravity-enhancer.openConversationManager",
@@ -71,6 +83,23 @@
         "title": "Open with Default Application"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "antigravity-conversations",
+          "title": "Conversations",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "antigravity-conversations": [
+        {
+          "id": "antigravity.conversationExplorer",
+          "name": "Conversation Explorer"
+        }
+      ]
+    },
     "customEditors": [
       {
         "viewType": "antigravity-enhancer.externalOpener",
@@ -96,6 +125,18 @@
       }
     ],
     "menus": {
+      "view/title": [
+        {
+          "command": "antigravity.refreshConversationTree",
+          "when": "view == antigravity.conversationExplorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "antigravity.openConversationManager",
+          "when": "view == antigravity.conversationExplorer",
+          "group": "navigation@2"
+        }
+      ],
       "explorer/context": [
         {
           "command": "antigravity-enhancer.openExternal",

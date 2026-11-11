@@ -40,13 +40,18 @@ const path = __importStar(require("path"));
 const os = __importStar(require("os"));
 const readline = __importStar(require("readline"));
 class ConversationManagerProvider {
-    static createOrShow(extensionUri) {
+    static createOrShow(extensionUri, initialFolder) {
         const column = vscode.window.activeTextEditor
             ? vscode.window.activeTextEditor.viewColumn
             : undefined;
         if (ConversationManagerProvider.currentPanel) {
             ConversationManagerProvider.currentPanel.reveal(column);
-            ConversationManagerProvider.currentPanel.webview.postMessage({ type: 'refreshRequest' });
+            if (initialFolder && ConversationManagerProvider.currentInstance) {
+                ConversationManagerProvider.currentInstance.selectFolder(initialFolder);
+            }
+            else {
+                ConversationManagerProvider.currentPanel.webview.postMessage({ type: 'refreshRequest' });
+            }
             return;
         }
         const panel = vscode.window.createWebviewPanel('antigravityConversationManager', 'Conversation Manager', column || vscode.ViewColumn.One, {
@@ -55,9 +60,9 @@ class ConversationManagerProvider {
             localResourceRoots: [extensionUri]
         });
         ConversationManagerProvider.currentPanel = panel;
-        new ConversationManagerProvider(panel, extensionUri);
+        ConversationManagerProvider.currentInstance = new ConversationManagerProvider(panel, extensionUri, initialFolder);
     }
-    constructor(panel, extensionUri) {
+    constructor(panel, extensionUri, initialFolder) {
         this._disposables = [];
         this._conversations = [];
         this._selectedFolder = 'ALL';
@@ -68,6 +73,9 @@ class ConversationManagerProvider {
         this._sortBy = 'recent';
         this._panel = panel;
         this._extensionUri = extensionUri;
+        if (initialFolder) {
+            this._selectedFolder = initialFolder;
+        }
         this._updateHtml();
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
         this._panel.webview.onDidReceiveMessage(async (message) => {
@@ -124,6 +132,7 @@ class ConversationManagerProvider {
     }
     dispose() {
         ConversationManagerProvider.currentPanel = undefined;
+        ConversationManagerProvider.currentInstance = undefined;
         this._panel.dispose();
         while (this._disposables.length) {
             const x = this._disposables.pop();
@@ -131,7 +140,14 @@ class ConversationManagerProvider {
                 x.dispose();
         }
     }
-    _normalizePath(uriOrPath) {
+    selectFolder(folder) {
+        this._selectedFolder = folder || 'ALL';
+        this._sendState();
+    }
+    async reload() {
+        await this._loadConversations();
+    }
+    static normalizePath(uriOrPath) {
         try {
             let s = decodeURIComponent(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
             if (/^file:\/\/\/[a-zA-Z]:/i.test(s)) {
@@ -164,8 +180,11 @@ class ConversationManagerProvider {
             return s;
         }
     }
-    _readDiskCache() {
-        const map = new Map();
+    _normalizePath(uriOrPath) {
+        return ConversationManagerProvider.normalizePath(uriOrPath);
+    }
+    static readDiskCache() {
+        const list = [];
         try {
             if (fs.existsSync(ConversationManagerProvider.CACHE_FILE)) {
                 const raw = JSON.parse(fs.readFileSync(ConversationManagerProvider.CACHE_FILE, 'utf8'));
@@ -173,15 +192,23 @@ class ConversationManagerProvider {
                     for (const item of raw.items) {
                         if (item && item.id) {
                             if (Array.isArray(item.workspaces)) {
-                                item.workspaces = item.workspaces.map((w) => this._normalizePath(w));
+                                item.workspaces = item.workspaces.map((w) => ConversationManagerProvider.normalizePath(w));
                             }
-                            map.set(item.id, item);
+                            list.push(item);
                         }
                     }
                 }
             }
         }
         catch { }
+        return list;
+    }
+    _readDiskCache() {
+        const map = new Map();
+        const list = ConversationManagerProvider.readDiskCache();
+        for (const it of list) {
+            map.set(it.id, it);
+        }
         return map;
     }
     _writeDiskCache(conversations) {
@@ -445,32 +472,40 @@ class ConversationManagerProvider {
             this._conversations = result;
             this._writeDiskCache(result);
             this._sendState();
+            try {
+                const { ConversationTreeProvider } = require('./conversationTreeProvider');
+                ConversationTreeProvider.instance?.refresh(result);
+            }
+            catch (_) { }
         }
         catch (e) {
             vscode.window.showErrorMessage('Error loading conversations: ' + (e?.message || String(e)));
         }
     }
-    _matchesFolder(conv, folderLower, includeSub) {
+    static matchesFolder(conv, folderLower, includeSub) {
         if (folderLower === '(no workspace)') {
             return conv.workspaces.length === 0;
         }
-        const target = this._normalizePath(folderLower).toLowerCase();
+        const target = ConversationManagerProvider.normalizePath(folderLower).toLowerCase();
         return conv.workspaces.some(w => {
-            const wl = this._normalizePath(w).toLowerCase();
+            const wl = ConversationManagerProvider.normalizePath(w).toLowerCase();
             if (includeSub) {
                 return wl === target || wl.startsWith(target.endsWith('/') ? target : target + '/');
             }
             return wl === target;
         });
     }
-    _buildFolderTree() {
+    _matchesFolder(conv, folderLower, includeSub) {
+        return ConversationManagerProvider.matchesFolder(conv, folderLower, includeSub);
+    }
+    static buildFolderTree(conversations, includeSubfolders = true) {
         const rootNodesMap = new Map();
         const currentWs = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0])
-            ? this._normalizePath(vscode.workspace.workspaceFolders[0].uri.fsPath)
+            ? ConversationManagerProvider.normalizePath(vscode.workspace.workspaceFolders[0].uri.fsPath)
             : '';
         let currentWorkspaceCount = 0;
-        for (const conv of this._conversations) {
-            if (currentWs && this._matchesFolder(conv, currentWs.toLowerCase(), this._includeSubfolders)) {
+        for (const conv of conversations) {
+            if (currentWs && ConversationManagerProvider.matchesFolder(conv, currentWs.toLowerCase(), includeSubfolders)) {
                 currentWorkspaceCount++;
             }
             const wsList = conv.workspaces.length > 0 ? conv.workspaces : ['(No Workspace)'];
@@ -572,6 +607,9 @@ class ConversationManagerProvider {
             return a.name.localeCompare(b.name);
         });
         return { rootNodes: serializedRoots, currentWorkspacePath: currentWs, currentWorkspaceCount };
+    }
+    _buildFolderTree() {
+        return ConversationManagerProvider.buildFolderTree(this._conversations, this._includeSubfolders);
     }
     _filterConversations() {
         const currentWs = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0])
@@ -1953,9 +1991,9 @@ class ConversationManagerProvider {
       if (node.isDriveOrRoot) {
         iconSvg = '<svg class="tree-icon drive-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 3H3V4h10v2zm1 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1zm-1 3H3v-2h10v2z"/></svg>';
       } else if (hasChildren && isExpanded) {
-        iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 13.5h13l.5-.5v-7l-.5-.5H8.29l-.85-.85L7 4H2l-.5.5v8.5l.5.5zm1-7.5h4.29l.85.85.36.15H14V8H2.5V6zm0 3H14v3.5H2.5V9z"/></svg>';
+        iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 3.5a.5.5 0 0 0-.5.5v8a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5v-6a.5.5 0 0 0-.5-.5H8l-.85-.85a.5.5 0 0 0-.35-.15H1.5zm.5 1h4.5l.85.85a.5.5 0 0 0 .35.15H14v1H2V4.5zm0 2.5h12v4.5H2V7z"/></svg>';
       } else {
-        iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 4H7.71l-.85-.85L6.51 3h-5l-.5.5v9l.5.5h13l.5-.5v-8l-.5-.5zm-.5 9H2V4h4.29l.85.85.36.15H14v8z"/></svg>';
+        iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M7.14 3.76l-.65-.65H1.5a.5.5 0 0 0-.5.5v8.78a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5V5.11a.5.5 0 0 0-.5-.5H8l-.86-.85zM2 4.11h4.29l.65.65H14v6.78H2V4.11z"/></svg>';
       }
 
       let out = '<div class="tree-item ' + (isSel ? 'active' : '') + '" style="padding-left:' + (indent + 8) + 'px" data-folder="' + escapedPath + '">' +
@@ -2003,7 +2041,7 @@ class ConversationManagerProvider {
     } else if (/^[a-zA-Z]:/.test(state.selectedFolder)) {
       iconSvg = '<svg class="overview-title-icon drive-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 3H3V4h10v2zm1 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1zm-1 3H3v-2h10v2z"/></svg>';
     } else {
-      iconSvg = '<svg class="overview-title-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 4H7.71l-.85-.85L6.51 3h-5l-.5.5v9l.5.5h13l.5-.5v-8l-.5-.5zm-.5 9H2V4h4.29l.85.85.36.15H14v8z"/></svg>';
+      iconSvg = '<svg class="overview-title-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M7.14 3.76l-.65-.65H1.5a.5.5 0 0 0-.5.5v8.78a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5V5.11a.5.5 0 0 0-.5-.5H8l-.86-.85zM2 4.11h4.29l.65.65H14v6.78H2V4.11z"/></svg>';
     }
 
     const scopeLabel = state.selectedFolder === 'ALL'

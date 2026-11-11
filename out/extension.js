@@ -42,6 +42,7 @@ const os = __importStar(require("os"));
 const crypto = __importStar(require("crypto"));
 const externalOpener_1 = require("./externalOpener");
 const conversationManager_1 = require("./conversationManager");
+const conversationTreeProvider_1 = require("./conversationTreeProvider");
 // Unique marker embedded in the patched code
 const PATCH_MARKER = '/* agy-chat-fixed */';
 const LEGACY_MARKER = '/* agy-clipboard-fixed */';
@@ -787,11 +788,23 @@ async function fixChecksumsOnly() {
     }
 }
 function activate(context) {
-    context.subscriptions.push(vscode.commands.registerCommand('antigravity-enhancer.apply', () => applyFix(false)), vscode.commands.registerCommand('antigravity-enhancer.remove', () => removeFix()), vscode.commands.registerCommand('antigravity-enhancer.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('agi-chat-fix.apply', () => applyFix(false)), vscode.commands.registerCommand('agi-chat-fix.remove', () => removeFix()), vscode.commands.registerCommand('agi-chat-fix.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('antigravity-clipboard-fix.apply', () => applyFix(false)), vscode.commands.registerCommand('antigravity-clipboard-fix.remove', () => removeFix()), vscode.commands.registerCommand('antigravity-clipboard-fix.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('antigravity.openConversationManager', () => {
-        conversationManager_1.ConversationManagerProvider.createOrShow(context.extensionUri);
-    }), vscode.commands.registerCommand('antigravity-enhancer.openConversationManager', () => {
-        conversationManager_1.ConversationManagerProvider.createOrShow(context.extensionUri);
+    context.subscriptions.push(vscode.commands.registerCommand('antigravity-enhancer.apply', () => applyFix(false)), vscode.commands.registerCommand('antigravity-enhancer.remove', () => removeFix()), vscode.commands.registerCommand('antigravity-enhancer.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('agi-chat-fix.apply', () => applyFix(false)), vscode.commands.registerCommand('agi-chat-fix.remove', () => removeFix()), vscode.commands.registerCommand('agi-chat-fix.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('antigravity-clipboard-fix.apply', () => applyFix(false)), vscode.commands.registerCommand('antigravity-clipboard-fix.remove', () => removeFix()), vscode.commands.registerCommand('antigravity-clipboard-fix.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('antigravity.openConversationManager', (folder) => {
+        conversationManager_1.ConversationManagerProvider.createOrShow(context.extensionUri, typeof folder === 'string' ? folder : undefined);
+    }), vscode.commands.registerCommand('antigravity-enhancer.openConversationManager', (folder) => {
+        conversationManager_1.ConversationManagerProvider.createOrShow(context.extensionUri, typeof folder === 'string' ? folder : undefined);
+    }), vscode.commands.registerCommand('antigravity.selectConversationFolder', (folder) => {
+        conversationManager_1.ConversationManagerProvider.createOrShow(context.extensionUri, folder);
+    }), vscode.commands.registerCommand('antigravity.refreshConversationTree', async () => {
+        if (conversationManager_1.ConversationManagerProvider.currentInstance) {
+            await conversationManager_1.ConversationManagerProvider.currentInstance.reload();
+        }
+        else {
+            treeProvider.refresh();
+        }
     }));
+    // Register Conversation Explorer Tree Provider in Activity Bar
+    const treeProvider = new conversationTreeProvider_1.ConversationTreeProvider(context.extensionUri);
+    context.subscriptions.push(vscode.window.registerTreeDataProvider('antigravity.conversationExplorer', treeProvider));
     // Register external file opener for binaries, office, media, archives
     (0, externalOpener_1.registerExternalOpener)(context);
     // Auto-load pending cascade on window activation or focus

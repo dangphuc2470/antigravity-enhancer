@@ -45,6 +45,7 @@ interface DiskCachePayload {
 
 export class ConversationManagerProvider {
     public static currentPanel: vscode.WebviewPanel | undefined;
+    public static currentInstance: ConversationManagerProvider | undefined;
     private readonly _panel: vscode.WebviewPanel;
     private readonly _extensionUri: vscode.Uri;
     private _disposables: vscode.Disposable[] = [];
@@ -58,16 +59,20 @@ export class ConversationManagerProvider {
     private _sortBy: 'recent' | 'oldest' | 'messages' | 'tokens' | 'steps' = 'recent';
 
     private static readonly CACHE_VERSION = 4;
-    private static readonly CACHE_FILE = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'enhancer_conversations_cache.json');
+    public static readonly CACHE_FILE = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'enhancer_conversations_cache.json');
 
-    public static createOrShow(extensionUri: vscode.Uri) {
+    public static createOrShow(extensionUri: vscode.Uri, initialFolder?: string) {
         const column = vscode.window.activeTextEditor
             ? vscode.window.activeTextEditor.viewColumn
             : undefined;
 
         if (ConversationManagerProvider.currentPanel) {
             ConversationManagerProvider.currentPanel.reveal(column);
-            ConversationManagerProvider.currentPanel.webview.postMessage({ type: 'refreshRequest' });
+            if (initialFolder && ConversationManagerProvider.currentInstance) {
+                ConversationManagerProvider.currentInstance.selectFolder(initialFolder);
+            } else {
+                ConversationManagerProvider.currentPanel.webview.postMessage({ type: 'refreshRequest' });
+            }
             return;
         }
 
@@ -83,12 +88,15 @@ export class ConversationManagerProvider {
         );
 
         ConversationManagerProvider.currentPanel = panel;
-        new ConversationManagerProvider(panel, extensionUri);
+        ConversationManagerProvider.currentInstance = new ConversationManagerProvider(panel, extensionUri, initialFolder);
     }
 
-    private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
+    private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, initialFolder?: string) {
         this._panel = panel;
         this._extensionUri = extensionUri;
+        if (initialFolder) {
+            this._selectedFolder = initialFolder;
+        }
 
         this._updateHtml();
 
@@ -154,6 +162,7 @@ export class ConversationManagerProvider {
 
     public dispose() {
         ConversationManagerProvider.currentPanel = undefined;
+        ConversationManagerProvider.currentInstance = undefined;
         this._panel.dispose();
         while (this._disposables.length) {
             const x = this._disposables.pop();
@@ -161,7 +170,16 @@ export class ConversationManagerProvider {
         }
     }
 
-    private _normalizePath(uriOrPath: string): string {
+    public selectFolder(folder: string) {
+        this._selectedFolder = folder || 'ALL';
+        this._sendState();
+    }
+
+    public async reload() {
+        await this._loadConversations();
+    }
+
+    public static normalizePath(uriOrPath: string): string {
         try {
             let s = decodeURIComponent(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
             if (/^file:\/\/\/[a-zA-Z]:/i.test(s)) {
@@ -189,8 +207,12 @@ export class ConversationManagerProvider {
         }
     }
 
-    private _readDiskCache(): Map<string, CachedConversation> {
-        const map = new Map<string, CachedConversation>();
+    private _normalizePath(uriOrPath: string): string {
+        return ConversationManagerProvider.normalizePath(uriOrPath);
+    }
+
+    public static readDiskCache(): CachedConversation[] {
+        const list: CachedConversation[] = [];
         try {
             if (fs.existsSync(ConversationManagerProvider.CACHE_FILE)) {
                 const raw = JSON.parse(fs.readFileSync(ConversationManagerProvider.CACHE_FILE, 'utf8'));
@@ -198,14 +220,23 @@ export class ConversationManagerProvider {
                     for (const item of raw.items) {
                         if (item && item.id) {
                             if (Array.isArray(item.workspaces)) {
-                                item.workspaces = item.workspaces.map((w: string) => this._normalizePath(w));
+                                item.workspaces = item.workspaces.map((w: string) => ConversationManagerProvider.normalizePath(w));
                             }
-                            map.set(item.id, item);
+                            list.push(item);
                         }
                     }
                 }
             }
         } catch {}
+        return list;
+    }
+
+    private _readDiskCache(): Map<string, CachedConversation> {
+        const map = new Map<string, CachedConversation>();
+        const list = ConversationManagerProvider.readDiskCache();
+        for (const it of list) {
+            map.set(it.id, it);
+        }
         return map;
     }
 
@@ -465,18 +496,23 @@ export class ConversationManagerProvider {
             this._conversations = result;
             this._writeDiskCache(result);
             this._sendState();
+
+            try {
+                const { ConversationTreeProvider } = require('./conversationTreeProvider');
+                ConversationTreeProvider.instance?.refresh(result);
+            } catch (_) {}
         } catch (e: any) {
             vscode.window.showErrorMessage('Error loading conversations: ' + (e?.message || String(e)));
         }
     }
 
-    private _matchesFolder(conv: CachedConversation, folderLower: string, includeSub: boolean): boolean {
+    public static matchesFolder(conv: CachedConversation, folderLower: string, includeSub: boolean): boolean {
         if (folderLower === '(no workspace)') {
             return conv.workspaces.length === 0;
         }
-        const target = this._normalizePath(folderLower).toLowerCase();
+        const target = ConversationManagerProvider.normalizePath(folderLower).toLowerCase();
         return conv.workspaces.some(w => {
-            const wl = this._normalizePath(w).toLowerCase();
+            const wl = ConversationManagerProvider.normalizePath(w).toLowerCase();
             if (includeSub) {
                 return wl === target || wl.startsWith(target.endsWith('/') ? target : target + '/');
             }
@@ -484,7 +520,11 @@ export class ConversationManagerProvider {
         });
     }
 
-    private _buildFolderTree(): { rootNodes: FolderNode[]; currentWorkspacePath: string; currentWorkspaceCount: number } {
+    private _matchesFolder(conv: CachedConversation, folderLower: string, includeSub: boolean): boolean {
+        return ConversationManagerProvider.matchesFolder(conv, folderLower, includeSub);
+    }
+
+    public static buildFolderTree(conversations: CachedConversation[], includeSubfolders: boolean = true): { rootNodes: FolderNode[]; currentWorkspacePath: string; currentWorkspaceCount: number } {
         const rootNodesMap = new Map<string, {
             id: string;
             name: string;
@@ -496,13 +536,13 @@ export class ConversationManagerProvider {
         }>();
 
         const currentWs = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0])
-            ? this._normalizePath(vscode.workspace.workspaceFolders[0].uri.fsPath)
+            ? ConversationManagerProvider.normalizePath(vscode.workspace.workspaceFolders[0].uri.fsPath)
             : '';
 
         let currentWorkspaceCount = 0;
 
-        for (const conv of this._conversations) {
-            if (currentWs && this._matchesFolder(conv, currentWs.toLowerCase(), this._includeSubfolders)) {
+        for (const conv of conversations) {
+            if (currentWs && ConversationManagerProvider.matchesFolder(conv, currentWs.toLowerCase(), includeSubfolders)) {
                 currentWorkspaceCount++;
             }
 
@@ -616,6 +656,10 @@ export class ConversationManagerProvider {
         });
 
         return { rootNodes: serializedRoots, currentWorkspacePath: currentWs, currentWorkspaceCount };
+    }
+
+    private _buildFolderTree(): { rootNodes: FolderNode[]; currentWorkspacePath: string; currentWorkspaceCount: number } {
+        return ConversationManagerProvider.buildFolderTree(this._conversations, this._includeSubfolders);
     }
 
     private _filterConversations(): {
@@ -2015,9 +2059,9 @@ export class ConversationManagerProvider {
       if (node.isDriveOrRoot) {
         iconSvg = '<svg class="tree-icon drive-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 3H3V4h10v2zm1 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1zm-1 3H3v-2h10v2z"/></svg>';
       } else if (hasChildren && isExpanded) {
-        iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 13.5h13l.5-.5v-7l-.5-.5H8.29l-.85-.85L7 4H2l-.5.5v8.5l.5.5zm1-7.5h4.29l.85.85.36.15H14V8H2.5V6zm0 3H14v3.5H2.5V9z"/></svg>';
+        iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 3.5a.5.5 0 0 0-.5.5v8a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5v-6a.5.5 0 0 0-.5-.5H8l-.85-.85a.5.5 0 0 0-.35-.15H1.5zm.5 1h4.5l.85.85a.5.5 0 0 0 .35.15H14v1H2V4.5zm0 2.5h12v4.5H2V7z"/></svg>';
       } else {
-        iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 4H7.71l-.85-.85L6.51 3h-5l-.5.5v9l.5.5h13l.5-.5v-8l-.5-.5zm-.5 9H2V4h4.29l.85.85.36.15H14v8z"/></svg>';
+        iconSvg = '<svg class="tree-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M7.14 3.76l-.65-.65H1.5a.5.5 0 0 0-.5.5v8.78a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5V5.11a.5.5 0 0 0-.5-.5H8l-.86-.85zM2 4.11h4.29l.65.65H14v6.78H2V4.11z"/></svg>';
       }
 
       let out = '<div class="tree-item ' + (isSel ? 'active' : '') + '" style="padding-left:' + (indent + 8) + 'px" data-folder="' + escapedPath + '">' +
@@ -2065,7 +2109,7 @@ export class ConversationManagerProvider {
     } else if (/^[a-zA-Z]:/.test(state.selectedFolder)) {
       iconSvg = '<svg class="overview-title-icon drive-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 3H3V4h10v2zm1 3H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1zm-1 3H3v-2h10v2z"/></svg>';
     } else {
-      iconSvg = '<svg class="overview-title-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 4H7.71l-.85-.85L6.51 3h-5l-.5.5v9l.5.5h13l.5-.5v-8l-.5-.5zm-.5 9H2V4h4.29l.85.85.36.15H14v8z"/></svg>';
+      iconSvg = '<svg class="overview-title-icon folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M7.14 3.76l-.65-.65H1.5a.5.5 0 0 0-.5.5v8.78a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5V5.11a.5.5 0 0 0-.5-.5H8l-.86-.85zM2 4.11h4.29l.65.65H14v6.78H2V4.11z"/></svg>';
     }
 
     const scopeLabel = state.selectedFolder === 'ALL'
