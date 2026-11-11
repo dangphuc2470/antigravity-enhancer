@@ -222,20 +222,20 @@ class ConversationBackupService {
         const now = new Date();
         const pad = (n) => String(n).padStart(2, '0');
         const dateStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
-        const defaultFilename = `antigravity-conversations-backup-${dateStr}.zip`;
+        const defaultFilename = `antigravity-conversations-export-${dateStr}.zip`;
         const defaultUri = vscode.Uri.file(path.join(os.homedir(), defaultFilename));
         const saveUri = await vscode.window.showSaveDialog({
             defaultUri,
             filters: { 'ZIP Archive': ['zip'] },
-            saveLabel: 'Save Backup',
-            title: 'Backup Antigravity Conversations'
+            saveLabel: 'Export',
+            title: 'Export Antigravity Conversations (.zip)'
         });
         if (!saveUri) {
             return;
         }
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
-            title: 'Backing up Antigravity conversations...',
+            title: 'Exporting Antigravity conversations...',
             cancellable: false
         }, async (progress) => {
             const entries = [];
@@ -293,7 +293,7 @@ class ConversationBackupService {
             const zipBuffer = createZipArchive(entries);
             fs.writeFileSync(saveUri.fsPath, zipBuffer);
             progress.report({ message: 'Done!', increment: 5 });
-            const action = await vscode.window.showInformationMessage(`Successfully backed up ${packedCount} conversation(s) to ${path.basename(saveUri.fsPath)}`, 'Show in Folder');
+            const action = await vscode.window.showInformationMessage(`Successfully exported ${packedCount} conversation(s) to ${path.basename(saveUri.fsPath)}`, 'Show in Folder');
             if (action === 'Show in Folder') {
                 vscode.commands.executeCommand('revealFileInOS', saveUri);
             }

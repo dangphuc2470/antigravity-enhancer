@@ -823,6 +823,9 @@ function activate(context) {
         await explorerProvider.refresh();
     }), vscode.commands.registerCommand('antigravity.openTrafficReport', () => {
         trafficReportPanel_1.TrafficReportPanel.createOrShow(context.extensionUri);
+    }), vscode.commands.registerCommand('antigravity.exportConversations', async () => {
+        const { ConversationBackupService } = require('./conversationBackup');
+        await ConversationBackupService.backupAllConversations();
     }), vscode.commands.registerCommand('antigravity.backupConversations', async () => {
         const { ConversationBackupService } = require('./conversationBackup');
         await ConversationBackupService.backupAllConversations();

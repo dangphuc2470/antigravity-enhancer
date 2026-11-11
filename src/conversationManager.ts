@@ -177,6 +177,7 @@ export class ConversationManagerProvider {
                     case 'openTrafficReport':
                         await this._openTrafficReport();
                         break;
+                    case 'export':
                     case 'backup': {
                         const { ConversationBackupService } = require('./conversationBackup');
                         await ConversationBackupService.backupAllConversations();
@@ -2252,9 +2253,9 @@ export class ConversationManagerProvider {
       vscode.postMessage({ type: 'openTrafficReport' });
       return;
     }
-    const bBackup = ev.target.closest('#btnBackup');
-    if (bBackup) {
-      vscode.postMessage({ type: 'backup' });
+    const bExport = ev.target.closest('#btnExport') || ev.target.closest('#btnBackup');
+    if (bExport) {
+      vscode.postMessage({ type: 'export' });
       return;
     }
     const bImport = ev.target.closest('#btnImport');
@@ -2417,8 +2418,8 @@ export class ConversationManagerProvider {
         '</div>' +
         '<div style="display:flex;align-items:center;gap:5px;">' +
           '<span class="overview-scope-badge">' + scopeLabel + '</span>' +
-          '<button class="btn-mini" id="btnBackup" title="Backup all conversations to .zip archive" style="padding:1.5px 6px;font-size:10.5px;">Backup</button>' +
           '<button class="btn-mini" id="btnImport" title="Import conversations from .zip archive (deduplicates existing)" style="padding:1.5px 6px;font-size:10.5px;">Import</button>' +
+          '<button class="btn-mini" id="btnExport" title="Export all conversations to .zip archive" style="padding:1.5px 6px;font-size:10.5px;">Export</button>' +
           '<button class="btn-mini" id="btnRefreshOverview" title="Refresh conversations" style="padding:1.5px 6px;font-size:10.5px;">Refresh</button>' +
         '</div>' +
       '</div>' +
