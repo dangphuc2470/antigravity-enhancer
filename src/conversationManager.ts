@@ -175,6 +175,9 @@ export class ConversationManagerProvider {
                     case 'moveConversation':
                         await this._moveConversation(message.id);
                         break;
+                    case 'exportMd':
+                        await this._exportConversationToMarkdown(message.id);
+                        break;
                     case 'openTrafficReport':
                         await this._openTrafficReport();
                         break;
@@ -1102,6 +1105,183 @@ export class ConversationManagerProvider {
         await ConversationManagerProvider.openTranscriptLog(id);
     }
 
+    private async _exportConversationToMarkdown(id: string) {
+        await ConversationManagerProvider.exportConversationToMarkdown(id);
+    }
+
+    public static async exportConversationToMarkdown(id: string): Promise<void> {
+        let conv = ConversationManagerProvider.currentInstance?._conversations.find(c => c.id === id);
+        if (!conv) {
+            const list = ConversationManagerProvider.readDiskCache();
+            conv = list.find(c => c.id === id);
+        }
+
+        const baseDir = path.join(os.homedir(), '.gemini', 'antigravity-ide');
+        const transcriptFullPath = path.join(baseDir, 'brain', id, '.system_generated', 'logs', 'transcript_full.jsonl');
+        const transcriptPath = path.join(baseDir, 'brain', id, '.system_generated', 'logs', 'transcript.jsonl');
+        const legacyMdPath = path.join(os.homedir(), '.gemini', 'conversations', `${id}.md`);
+
+        let mdContent = '';
+
+        const activeTranscript = fs.existsSync(transcriptFullPath)
+            ? transcriptFullPath
+            : (fs.existsSync(transcriptPath) ? transcriptPath : null);
+
+        if (activeTranscript) {
+            mdContent = await ConversationManagerProvider.convertTranscriptToMarkdown(id, activeTranscript, conv);
+        } else if (fs.existsSync(legacyMdPath)) {
+            try {
+                mdContent = fs.readFileSync(legacyMdPath, 'utf8');
+            } catch (err: any) {
+                vscode.window.showErrorMessage(`Failed to read markdown file: ${err?.message || String(err)}`);
+                return;
+            }
+        } else {
+            vscode.window.showErrorMessage('No transcript or conversation history found to export.');
+            return;
+        }
+
+        const rawTitle = conv?.title || id;
+        const safeTitle = rawTitle.replace(/[\\/:*?"<>|\r\n]/g, '_').trim().slice(0, 80) || 'conversation';
+        const defaultFilename = `${safeTitle}.md`;
+
+        let defaultFolder = os.homedir();
+        if (conv?.workspaces && conv.workspaces.length > 0 && fs.existsSync(conv.workspaces[0])) {
+            defaultFolder = conv.workspaces[0];
+        } else if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+            defaultFolder = vscode.workspace.workspaceFolders[0].uri.fsPath;
+        }
+
+        const saveUri = await vscode.window.showSaveDialog({
+            defaultUri: vscode.Uri.file(path.join(defaultFolder, defaultFilename)),
+            filters: { 'Markdown': ['md'] },
+            saveLabel: 'Export',
+            title: 'Export Conversation to Markdown'
+        });
+
+        if (!saveUri) return;
+
+        try {
+            fs.writeFileSync(saveUri.fsPath, mdContent, 'utf8');
+            const action = await vscode.window.showInformationMessage(
+                `Exported conversation to ${path.basename(saveUri.fsPath)}`,
+                'Open File',
+                'Reveal in File Explorer'
+            );
+            if (action === 'Open File') {
+                const doc = await vscode.workspace.openTextDocument(saveUri);
+                await vscode.window.showTextDocument(doc);
+            } else if (action === 'Reveal in File Explorer') {
+                await vscode.commands.executeCommand('revealFileInOS', saveUri);
+            }
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to export markdown: ${err?.message || String(err)}`);
+        }
+    }
+
+    public static async convertTranscriptToMarkdown(id: string, transcriptFile: string, conv?: CachedConversation): Promise<string> {
+        const fileStream = fs.createReadStream(transcriptFile);
+        const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+        const title = conv?.title || id;
+        const createdStr = conv?.createdTime ? new Date(conv.createdTime).toLocaleString() : '';
+        const modifiedStr = conv?.lastModifiedTime ? new Date(conv.lastModifiedTime).toLocaleString() : '';
+        const wsStr = conv?.workspaces && conv.workspaces.length > 0 ? conv.workspaces.join(', ') : 'Standalone';
+
+        const lines: string[] = [];
+        lines.push(`# ${title}`);
+        lines.push('');
+        lines.push(`- **Conversation ID:** \`${id}\``);
+        if (createdStr) lines.push(`- **Created:** ${createdStr}`);
+        if (modifiedStr) lines.push(`- **Last Modified:** ${modifiedStr}`);
+        lines.push(`- **Workspace:** ${wsStr}`);
+        lines.push('');
+        lines.push('---');
+        lines.push('');
+
+        let pendingTools: Array<{ stepIndex?: number; name: string }> = [];
+
+        const flushTools = () => {
+            if (pendingTools.length > 0) {
+                lines.push(`<details><summary>Tool Executions (${pendingTools.length})</summary>`);
+                lines.push('');
+                for (const t of pendingTools) {
+                    const stepPrefix = t.stepIndex !== undefined ? `Step #${t.stepIndex}: ` : '';
+                    lines.push(`- ${stepPrefix}\`${t.name}\``);
+                }
+                lines.push('');
+                lines.push('</details>');
+                lines.push('');
+                pendingTools = [];
+            }
+        };
+
+        for await (const rawLine of rl) {
+            if (!rawLine.trim()) continue;
+            try {
+                const step = JSON.parse(rawLine);
+                const sType = step.type;
+
+                if (sType === 'USER_INPUT') {
+                    flushTools();
+                    const stepIdx = step.step_index !== undefined ? ` (Step #${step.step_index})` : '';
+                    const timeStr = step.created_at ? ` · ${new Date(step.created_at).toLocaleTimeString()}` : '';
+
+                    lines.push(`## User${stepIdx}${timeStr}`);
+                    lines.push('');
+
+                    let txt = typeof step.content === 'string' ? step.content : '';
+                    const reqMatch = txt.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
+                    if (reqMatch) {
+                        txt = reqMatch[1].trim();
+                    }
+                    lines.push(txt || '*(Empty prompt)*');
+                    lines.push('');
+                } else if (sType === 'PLANNER_RESPONSE') {
+                    const stepIdx = step.step_index !== undefined ? ` (Step #${step.step_index})` : '';
+                    const timeStr = step.created_at ? ` · ${new Date(step.created_at).toLocaleTimeString()}` : '';
+
+                    if (step.tool_calls && Array.isArray(step.tool_calls)) {
+                        for (const tc of step.tool_calls) {
+                            const callName = tc?.name || tc?.toolName || 'tool';
+                            pendingTools.push({ stepIndex: step.step_index, name: callName });
+                        }
+                    }
+
+                    const c = typeof step.content === 'string' ? step.content.trim() : '';
+                    const th = typeof step.thinking === 'string' ? step.thinking.trim() : '';
+
+                    if (th) {
+                        lines.push('<details><summary>Thinking Process</summary>');
+                        lines.push('');
+                        lines.push(th);
+                        lines.push('');
+                        lines.push('</details>');
+                        lines.push('');
+                    }
+
+                    if (c) {
+                        lines.push(`## Assistant${stepIdx}${timeStr}`);
+                        lines.push('');
+                        lines.push(c);
+                        lines.push('');
+                        flushTools();
+                        lines.push('---');
+                        lines.push('');
+                    }
+                } else if (step.tool_calls && Array.isArray(step.tool_calls)) {
+                    for (const tc of step.tool_calls) {
+                        const callName = tc?.name || tc?.toolName || 'tool';
+                        pendingTools.push({ stepIndex: step.step_index, name: callName });
+                    }
+                }
+            } catch (_) {}
+        }
+
+        flushTools();
+        return lines.join('\n');
+    }
+
     private async _forkConversation(id: string, stepIndex: number) {
         await ConversationManagerProvider.forkConversation(id, stepIndex);
     }
@@ -1831,51 +2011,66 @@ export class ConversationManagerProvider {
     min-width: 0;
   }
   .detail-header {
-    padding: 10px 16px;
+    padding: 12px 20px;
     border-bottom: 1px solid var(--border);
-    background: var(--sidebar-bg);
+    background: var(--vscode-sideBar-background, rgba(255, 255, 255, 0.025));
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: 14px;
     flex-shrink: 0;
   }
   .detail-title {
-    font-size: 14px;
-    font-weight: 600;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--fg);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
+    letter-spacing: -0.2px;
   }
   .detail-actions {
     display: flex;
-    gap: 6px;
+    align-items: center;
+    gap: 8px;
     flex-shrink: 0;
   }
   .btn-primary {
-    background: var(--button-bg);
-    color: var(--button-fg);
-    border: 1px solid transparent;
-    padding: 4px 11px;
-    border-radius: 2px;
+    background: #3b82f6;
+    color: #ffffff;
+    border: none;
+    padding: 5px 16px;
+    border-radius: 9999px;
     cursor: pointer;
-    font-weight: 500;
+    font-weight: 600;
     font-size: 12px;
     font-family: inherit;
+    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
+    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
   }
-  .btn-primary:hover { background: var(--button-hover); }
+  .btn-primary:hover {
+    background: #2563eb;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(59, 130, 246, 0.4);
+  }
   .btn-secondary {
-    background: var(--btn-sec-bg);
-    border: 1px solid transparent;
-    color: var(--btn-sec-fg);
-    padding: 4px 10px;
-    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--fg);
+    padding: 5px 14px;
+    border-radius: 9999px;
     cursor: pointer;
     font-size: 12px;
+    font-weight: 500;
     font-family: inherit;
+    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
   }
-  .btn-secondary:hover { background: var(--btn-sec-hover); }
+  .btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.11);
+    border-color: rgba(255, 255, 255, 0.22);
+    transform: translateY(-1px);
+  }
   .btn-danger:hover { color: var(--error-fg); }
 
   /* Stats Grid */
@@ -1888,64 +2083,46 @@ export class ConversationManagerProvider {
     background: var(--bg);
     flex-shrink: 0;
   }
-  .stat-card {
-    background: var(--sidebar-bg);
-    border: 1px solid var(--vscode-widget-border, var(--border));
-    border-radius: 10px;
-    padding: 8px 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    transition: background 0.15s ease, border-color 0.15s ease;
-  }
-  .stat-card:hover {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(255, 255, 255, 0.13);
-  }
-  .stat-card .stat-label {
-    font-size: 10.5px;
-    text-transform: uppercase;
-    color: var(--muted);
-    font-weight: 600;
-    letter-spacing: 0.4px;
-  }
-  .stat-card .stat-value {
-    font-size: 14px;
-    font-weight: 600;
-  }
-  .stat-card .stat-sub {
-    font-size: 11px;
-    color: var(--muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
 
   /* Metadata row */
   .metadata-bar {
-    padding: 7px 16px;
+    padding: 8px 16px;
     border-bottom: 1px solid var(--border);
     font-size: 11.5px;
     color: var(--muted);
     display: flex;
     flex-wrap: wrap;
-    gap: 8px 18px;
-    background: var(--sidebar-bg);
+    gap: 6px;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.015);
     flex-shrink: 0;
   }
-  .metadata-item {
-    display: flex;
+  .m3-chip {
+    display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
+    padding: 2.5px 10px;
+    border-radius: 9999px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 11px;
+    color: var(--muted);
+    user-select: none;
+    transition: background 0.15s ease, border-color 0.15s ease;
   }
-  .metadata-item b {
+  .m3-chip:hover {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+  .m3-chip b {
     color: var(--fg);
-    font-weight: 500;
+    font-weight: 600;
   }
   .meta-link {
-    color: var(--link);
+    color: #60a5fa;
     cursor: pointer;
     text-decoration: none;
+    font-weight: 500;
   }
   .meta-link:hover {
     text-decoration: underline;
@@ -1953,9 +2130,10 @@ export class ConversationManagerProvider {
 
   /* Search match bar inside detail */
   .detail-search-bar {
-    padding: 5px 16px;
+    padding: 6px 16px;
     border-bottom: 1px solid var(--border);
-    background: var(--bg);
+    background: rgba(234, 179, 8, 0.06);
+    border-left: 3px solid #eab308;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1974,63 +2152,91 @@ export class ConversationManagerProvider {
   .messages-container {
     flex: 1;
     overflow-y: auto;
-    padding: 12px 16px;
+    padding: 16px 20px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
   }
   .msg-bubble {
-    border-radius: 3px;
-    padding: 9px 12px;
-    font-size: 12.5px;
-    line-height: 1.5;
-    border: 1px solid var(--border);
-    background: var(--sidebar-bg);
+    border-radius: 12px;
+    padding: 12px 16px;
+    font-size: 13px;
+    line-height: 1.6;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+    transition: border-color 0.15s ease;
+  }
+  .msg-bubble:hover {
+    border-color: rgba(255, 255, 255, 0.14);
   }
   .msg-bubble.user {
-    background: var(--user-bg);
+    background: linear-gradient(180deg, rgba(59, 130, 246, 0.07) 0%, rgba(59, 130, 246, 0.03) 100%);
+    border: 1px solid rgba(59, 130, 246, 0.22);
   }
   .msg-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    font-size: 11px;
+    font-size: 11.5px;
     font-weight: 600;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
     color: var(--muted);
-    padding-bottom: 4px;
-    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   }
   .msg-header-right {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
+  }
+  .msg-role-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+  }
+  .msg-role-pill.user {
+    background: rgba(59, 130, 246, 0.18);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.28);
+  }
+  .msg-role-pill.assistant {
+    background: rgba(168, 85, 247, 0.16);
+    color: #d8b4fe;
+    border: 1px solid rgba(168, 85, 247, 0.25);
+  }
+  .msg-role-pill.archive {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--muted);
+    border: 1px solid rgba(255, 255, 255, 0.1);
   }
   .msg-fork-btn {
-    opacity: 0.7;
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 1px 7px;
+    opacity: 0.75;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 9999px;
+    padding: 2px 10px;
     font-size: 10.5px;
-    font-weight: 500;
+    font-weight: 600;
     line-height: 1.2;
     cursor: pointer;
-    transition: all 0.15s ease;
-    background: transparent;
-    color: var(--muted);
+    transition: all 0.18s cubic-bezier(0.2, 0, 0, 1);
+    color: var(--fg);
   }
   .msg-bubble:hover .msg-fork-btn {
     opacity: 1;
-    border-color: rgba(255, 255, 255, 0.22);
-    color: var(--fg);
+    border-color: rgba(255, 255, 255, 0.25);
   }
   .msg-fork-btn:hover {
-    background: var(--button-bg, #007acc) !important;
-    color: var(--button-fg, #ffffff) !important;
+    background: #3b82f6 !important;
+    color: #ffffff !important;
     border-color: transparent !important;
-  }
-  .msg-role {
-    color: var(--fg);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.35);
   }
   .msg-body {
     white-space: pre-wrap;
@@ -2038,28 +2244,31 @@ export class ConversationManagerProvider {
     font-family: inherit;
   }
   .thinking-block {
-    margin-bottom: 8px;
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    background: var(--bg);
-    font-size: 11.5px;
+    margin-bottom: 10px;
+    border: 1px solid rgba(192, 132, 252, 0.2);
+    border-radius: 10px;
+    background: rgba(20, 16, 28, 0.45);
+    font-size: 12px;
+    overflow: hidden;
   }
   .thinking-block summary {
-    padding: 4px 8px;
+    padding: 6px 12px;
     cursor: pointer;
-    color: var(--muted);
+    color: #d8b4fe;
     user-select: none;
-    font-weight: 500;
+    font-weight: 600;
+    transition: background 0.15s ease;
   }
   .thinking-block summary:hover {
-    color: var(--fg);
+    background: rgba(192, 132, 252, 0.08);
   }
   .thinking-content {
-    padding: 6px 8px;
-    border-top: 1px solid var(--border);
+    padding: 8px 12px;
+    border-top: 1px solid rgba(192, 132, 252, 0.12);
     white-space: pre-wrap;
     word-break: break-word;
-    color: var(--muted);
+    color: rgba(255, 255, 255, 0.72);
+    line-height: 1.55;
   }
 
   .empty-state {
@@ -2368,6 +2577,10 @@ export class ConversationManagerProvider {
         '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 4.5V14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2h5.5L14 4.5zm-3 0A1.5 1.5 0 0 1 9.5 3V1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V4.5h-2z"/></svg>' +
         '<span>View Log</span>' +
       '</div>' +
+      '<div class="context-menu-item" data-action="exportMd" data-id="' + escapeHtml(c.id) + '">' +
+        '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M14 4.5V14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2h5.5L14 4.5zm-3 0A1.5 1.5 0 0 1 9.5 3V1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V4.5h-2zm-2.5 3.5a.5.5 0 0 0-1 0v3.793l-1.146-1.147a.5.5 0 0 0-.708.708l2 2a.5.5 0 0 0 .708 0l2-2a.5.5 0 0 0-.708-.708L8.5 11.793V8z"/></svg>' +
+        '<span>Export to MD...</span>' +
+      '</div>' +
       '<div class="context-menu-item" data-action="rename" data-id="' + escapeHtml(c.id) + '" data-title="' + escapeHtml(c.title) + '">' +
         '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M12.854.146a.5.5 0 0 0-.707 0L10.5 1.793 14.207 5.5l1.647-1.646a.5.5 0 0 0 0-.708l-3-3zm.646 6.061L9.793 2.5 3.293 9H3.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.207l6.5-6.5zm-7.468 7.468A.5.5 0 0 1 6 13.5V13h-.5a.5.5 0 0 1-.5-.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.5-.5V10h-.5a.499.499 0 0 1-.175-.032l-.179.178a.5.5 0 0 0-.11.168l-2 5a.5.5 0 0 0 .65.65l5-2a.5.5 0 0 0 .168-.11l.178-.178z"/></svg>' +
         '<span>Rename...</span>' +
@@ -2379,7 +2592,7 @@ export class ConversationManagerProvider {
       '</div>';
 
     const menuWidth = 185;
-    const menuHeight = 165;
+    const menuHeight = 195;
     const posX = (x + menuWidth > window.innerWidth) ? Math.max(10, window.innerWidth - menuWidth - 10) : x;
     const posY = (y + menuHeight > window.innerHeight) ? Math.max(10, window.innerHeight - menuHeight - 10) : y;
 
@@ -2408,6 +2621,8 @@ export class ConversationManagerProvider {
       vscode.postMessage({ type: 'openInChat', id });
     } else if (action === 'openTranscriptLog' && id) {
       vscode.postMessage({ type: 'openTranscriptLog', id });
+    } else if (action === 'exportMd' && id) {
+      vscode.postMessage({ type: 'exportMd', id });
     } else if (action === 'rename' && id) {
       const title = item.getAttribute('data-title') || '';
       vscode.postMessage({ type: 'requestRename', id, oldTitle: title });
@@ -2777,8 +2992,9 @@ export class ConversationManagerProvider {
         ? '<button class="btn-mini msg-fork-btn" data-action="forkFromStep" data-id="' + escapeHtml(c.id) + '" data-step="' + m.stepIndex + '" title="Fork conversation from this step (' + stepLabel + ')">Fork</button>'
         : '';
 
+      const roleClass = isUser ? 'user' : (m.role === 'system' ? 'archive' : 'assistant');
       messagesHtml += '<div class="msg-bubble ' + (isUser ? 'user' : 'assistant') + '">' +
-        '<div class="msg-header"><span class="msg-role">' + roleLabel + '</span><span class="msg-header-right"><span>' + escapeHtml(rightMeta) + '</span>' + forkBtn + '</span></div>' +
+        '<div class="msg-header"><span class="msg-role-pill ' + roleClass + '">' + roleLabel + '</span><span class="msg-header-right"><span>' + escapeHtml(rightMeta) + '</span>' + forkBtn + '</span></div>' +
         thinkingHtml +
         '<div class="msg-body">' + bodyHighlighted + '</div>' +
         '</div>';
@@ -2794,42 +3010,39 @@ export class ConversationManagerProvider {
           '<button class="btn-primary" data-action="openInChat" data-id="' + escapeHtml(c.id) + '">Open in Chat</button>' +
           '<button class="btn-secondary" data-action="openFind" title="Find in conversation (Ctrl+F)">Find</button>' +
           '<button class="btn-secondary" data-action="openTranscriptLog" data-id="' + escapeHtml(c.id) + '">View Log</button>' +
-          '<button class="btn-secondary" data-action="rename" data-id="' + escapeHtml(c.id) + '" data-title="' + escapeHtml(c.title) + '">Rename</button>' +
-          '<button class="btn-secondary" data-action="move" data-id="' + escapeHtml(c.id) + '">Move...</button>' +
-          '<button class="btn-secondary btn-danger" data-action="delete" data-id="' + escapeHtml(c.id) + '">Delete</button>' +
         '</div>' +
       '</div>' +
 
       '<div class="detail-stats">' +
-        '<div class="stat-card">' +
-          '<span class="stat-label">Messages</span>' +
-          '<span class="stat-value">' + totalMsgs + ' total</span>' +
-          '<span class="stat-sub">' + (c.userMsgs || 0) + ' user / ' + (c.modelMsgs || 0) + ' AI · ' + (c.toolCalls || 0) + ' tools</span>' +
+        '<div class="m3-stat-card">' +
+          '<span class="m3-label">Messages</span>' +
+          '<span class="m3-value">' + totalMsgs + ' total</span>' +
+          '<span class="m3-sub">' + (c.userMsgs || 0) + ' user / ' + (c.modelMsgs || 0) + ' AI · ' + (c.toolCalls || 0) + ' tools</span>' +
         '</div>' +
-        '<div class="stat-card">' +
-          '<span class="stat-label">Context Memory</span>' +
-          '<span class="stat-value">~' + formatNumber(c.estTotalTokens) + '</span>' +
-          '<span class="stat-sub">' + formatNumber(c.estInputTokens) + ' in / ' + formatNumber(c.estOutputTokens) + ' out' + thinkingNote + '</span>' +
+        '<div class="m3-stat-card">' +
+          '<span class="m3-label">Context Memory</span>' +
+          '<span class="m3-value">~' + formatNumber(c.estTotalTokens) + '</span>' +
+          '<span class="m3-sub">' + formatNumber(c.estInputTokens) + ' in / ' + formatNumber(c.estOutputTokens) + ' out' + thinkingNote + '</span>' +
         '</div>' +
-        '<div class="stat-card clickable" data-action="openTrafficReport" title="Click to open detailed API Traffic & Token Report" style="cursor:pointer;">' +
-          '<span class="stat-label">API Traffic (Full)</span>' +
-          '<span class="stat-value">~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + '</span>' +
-          '<span class="stat-sub">' + (c.modelMsgs || 0) + ' requests &middot; Cumulative &rarr;</span>' +
+        '<div class="m3-stat-card clickable" data-action="openTrafficReport" title="Click to open detailed API Traffic & Token Report" style="cursor:pointer;">' +
+          '<span class="m3-label">API Traffic (Full)</span>' +
+          '<span class="m3-value">~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + '</span>' +
+          '<span class="m3-sub">' + (c.modelMsgs || 0) + ' reqs &middot; Cumulative &rarr;</span>' +
         '</div>' +
-        '<div class="stat-card">' +
-          '<span class="stat-label">Duration</span>' +
-          '<span class="stat-value">' + durationStr + '</span>' +
-          '<span class="stat-sub">Updated ' + formatTime(c.lastModifiedTime) + '</span>' +
+        '<div class="m3-stat-card">' +
+          '<span class="m3-label">Duration</span>' +
+          '<span class="m3-value">' + durationStr + '</span>' +
+          '<span class="m3-sub">Updated ' + formatTime(c.lastModifiedTime) + '</span>' +
         '</div>' +
       '</div>' +
 
       '<div class="metadata-bar">' +
-        '<div class="metadata-item"><b>ID:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="copy" data-copy="' + escapeHtml(c.id) + '" title="Click to copy full ID">' + escapeHtml(c.id) + '</span></div>' +
-        '<div class="metadata-item"><b>Workspace:</b> <span class="meta-link" data-action="copy" data-copy="' + escapeHtml(wsStr) + '" title="' + wsFullTitle + ' (click to copy)">' + wsDisplay + '</span></div>' +
-        '<div class="metadata-item"><b>Steps:</b> <span>' + c.stepCount + ' (' + (c.hasTranscript ? 'Transcript' : 'DB') + ')</span></div>' +
-        '<div class="metadata-item"><b>Created:</b> <span>' + escapeHtml(createdStr) + '</span></div>' +
-        '<div class="metadata-item"><b>Modified:</b> <span>' + escapeHtml(modifiedStr) + '</span></div>' +
-        (c.parentConversationId ? ('<div class="metadata-item"><b>Forked from:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="jumpConv" data-id="' + escapeHtml(c.parentConversationId) + '" title="Open parent conversation">' + escapeHtml(c.parentConversationId.slice(0, 8)) + '...</span></div>') : '') +
+        '<div class="m3-chip"><b>ID:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="copy" data-copy="' + escapeHtml(c.id) + '" title="Click to copy full ID">' + escapeHtml(c.id) + '</span></div>' +
+        '<div class="m3-chip"><b>Workspace:</b> <span class="meta-link" data-action="copy" data-copy="' + escapeHtml(wsStr) + '" title="' + wsFullTitle + ' (click to copy)">' + wsDisplay + '</span></div>' +
+        '<div class="m3-chip"><b>Steps:</b> <span>' + c.stepCount + ' (' + (c.hasTranscript ? 'Transcript' : 'DB') + ')</span></div>' +
+        '<div class="m3-chip"><b>Created:</b> <span>' + escapeHtml(createdStr) + '</span></div>' +
+        '<div class="m3-chip"><b>Modified:</b> <span>' + escapeHtml(modifiedStr) + '</span></div>' +
+        (c.parentConversationId ? ('<div class="m3-chip"><b>Forked:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="jumpConv" data-id="' + escapeHtml(c.parentConversationId) + '" title="Open parent conversation">' + escapeHtml(c.parentConversationId.slice(0, 8)) + '...</span></div>') : '') +
       '</div>' +
 
       (q ? (
@@ -2964,7 +3177,7 @@ export class ConversationManagerProvider {
       {
         acceptNode: node => {
           if (!node.textContent || !node.textContent.trim()) return NodeFilter.FILTER_REJECT;
-          if (node.parentElement && node.parentElement.closest('#findWidget, .stat-card, .detail-actions, script, style')) {
+          if (node.parentElement && node.parentElement.closest('#findWidget, .m3-stat-card, .stat-card, .detail-actions, script, style')) {
             return NodeFilter.FILTER_REJECT;
           }
           return NodeFilter.FILTER_ACCEPT;
