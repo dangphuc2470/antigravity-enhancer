@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as readline from 'readline';
+import * as crypto from 'crypto';
 
 export interface CachedConversation {
     id: string;
@@ -188,6 +189,9 @@ export class ConversationManagerProvider {
                         await ConversationBackupService.importConversations();
                         break;
                     }
+                    case 'forkConversation':
+                        await this._forkConversation(message.id, message.stepIndex);
+                        break;
                 }
             },
             null,
@@ -218,6 +222,11 @@ export class ConversationManagerProvider {
 
     public setIncludeSubfolders(val: boolean) {
         this._includeSubfolders = val;
+        this._sendState();
+    }
+
+    public selectConversation(id: string) {
+        this._selectedId = id;
         this._sendState();
     }
 
@@ -1093,6 +1102,198 @@ export class ConversationManagerProvider {
         await ConversationManagerProvider.openTranscriptLog(id);
     }
 
+    private async _forkConversation(id: string, stepIndex: number) {
+        await ConversationManagerProvider.forkConversation(id, stepIndex);
+    }
+
+    public static async forkConversation(id: string, stepIndex: number) {
+        const instance = ConversationManagerProvider.currentInstance;
+        let conv = instance?._conversations.find(c => c.id === id);
+        if (!conv) {
+            const list = ConversationManagerProvider.readDiskCache();
+            conv = list.find(c => c.id === id);
+        }
+
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: `Forking conversation from step #${stepIndex}...`,
+            cancellable: false
+        }, async () => {
+            let forkedId: string | null = null;
+            let usedNativeFork = false;
+            try {
+                const res = await vscode.commands.executeCommand<any>('workbench.action.forkCascadeFromManager', id, stepIndex);
+                if (typeof res === 'string' && res) {
+                    forkedId = res;
+                    usedNativeFork = true;
+                } else if (res && typeof res.newCascadeId === 'string') {
+                    forkedId = res.newCascadeId;
+                    usedNativeFork = true;
+                }
+            } catch (e) {
+                console.warn('[ConversationManager] Native fork command failed, falling back to transcript copy:', e);
+            }
+
+            if (!forkedId) {
+                forkedId = await ConversationManagerProvider.createTranscriptFork(id, stepIndex, conv);
+            }
+
+            if (forkedId) {
+                if (usedNativeFork) {
+                    await new Promise(r => setTimeout(r, 350));
+                }
+                vscode.window.showInformationMessage(`Conversation forked at step #${stepIndex}.`);
+                if (instance) {
+                    await instance._loadConversations();
+                    instance.selectConversation(forkedId);
+                }
+                if (!usedNativeFork) {
+                    await ConversationManagerProvider.openInChat(forkedId, conv);
+                }
+            } else {
+                vscode.window.showErrorMessage(`Failed to fork conversation at step #${stepIndex}.`);
+            }
+        });
+    }
+
+    public static async createTranscriptFork(sourceId: string, stepIndex: number, sourceConv?: CachedConversation): Promise<string | null> {
+        try {
+            const baseDir = path.join(os.homedir(), '.gemini', 'antigravity-ide');
+            const srcBrainDir = path.join(baseDir, 'brain', sourceId);
+            const srcLogsDir = path.join(srcBrainDir, '.system_generated', 'logs');
+            const srcTranscript = path.join(srcLogsDir, 'transcript.jsonl');
+
+            if (!fs.existsSync(srcTranscript)) {
+                vscode.window.showErrorMessage('No transcript file found to fork.');
+                return null;
+            }
+
+            const newId = crypto.randomUUID();
+            const dstBrainDir = path.join(baseDir, 'brain', newId);
+            const dstLogsDir = path.join(dstBrainDir, '.system_generated', 'logs');
+            fs.mkdirSync(dstLogsDir, { recursive: true });
+
+            let totalSteps = 0;
+            const rl = readline.createInterface({
+                input: fs.createReadStream(srcTranscript),
+                crlfDelay: Infinity
+            });
+
+            const slicedLines: string[] = [];
+            for await (const line of rl) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+                try {
+                    const step = JSON.parse(trimmed);
+                    const sIdx = typeof step.step_index === 'number' ? step.step_index : totalSteps;
+                    if (sIdx <= stepIndex) {
+                        slicedLines.push(trimmed);
+                        totalSteps++;
+                    } else {
+                        break;
+                    }
+                } catch {
+                    slicedLines.push(trimmed);
+                    totalSteps++;
+                }
+            }
+
+            if (slicedLines.length === 0) {
+                vscode.window.showErrorMessage(`No steps found up to step #${stepIndex}.`);
+                return null;
+            }
+
+            fs.writeFileSync(path.join(dstLogsDir, 'transcript.jsonl'), slicedLines.join('\n') + '\n', 'utf8');
+
+            const srcTranscriptFull = path.join(srcLogsDir, 'transcript_full.jsonl');
+            if (fs.existsSync(srcTranscriptFull)) {
+                const rlFull = readline.createInterface({
+                    input: fs.createReadStream(srcTranscriptFull),
+                    crlfDelay: Infinity
+                });
+                const fullLines: string[] = [];
+                for await (const line of rlFull) {
+                    const trimmed = line.trim();
+                    if (!trimmed) continue;
+                    try {
+                        const step = JSON.parse(trimmed);
+                        const sIdx = typeof step.step_index === 'number' ? step.step_index : fullLines.length;
+                        if (sIdx <= stepIndex) {
+                            fullLines.push(trimmed);
+                        } else {
+                            break;
+                        }
+                    } catch {
+                        fullLines.push(trimmed);
+                    }
+                }
+                if (fullLines.length > 0) {
+                    fs.writeFileSync(path.join(dstLogsDir, 'transcript_full.jsonl'), fullLines.join('\n') + '\n', 'utf8');
+                }
+            }
+
+            const mediaDirs = ['.tempmediaStorage', '.user_uploaded'];
+            for (const md of mediaDirs) {
+                const srcM = path.join(srcBrainDir, md);
+                const dstM = path.join(dstBrainDir, md);
+                if (fs.existsSync(srcM)) {
+                    try {
+                        fs.cpSync(srcM, dstM, { recursive: true });
+                    } catch (_) {}
+                }
+            }
+
+            try {
+                const files = fs.readdirSync(srcBrainDir);
+                for (const f of files) {
+                    if (/\.(png|jpg|jpeg|webp|gif|svg)$/i.test(f)) {
+                        try {
+                            fs.copyFileSync(path.join(srcBrainDir, f), path.join(dstBrainDir, f));
+                        } catch (_) {}
+                    }
+                }
+            } catch (_) {}
+
+            const cacheList = ConversationManagerProvider.readDiskCache();
+            const baseTitle = sourceConv?.title || 'Conversation';
+            const newTitle = `Fork of ${baseTitle} (Step #${stepIndex})`;
+            const ratio = totalSteps / Math.max(1, sourceConv?.stepCount || totalSteps);
+            const newCached: CachedConversation = {
+                id: newId,
+                title: newTitle,
+                workspaces: sourceConv?.workspaces || [],
+                rawWorkspaces: sourceConv?.rawWorkspaces || [],
+                userWorkspaces: sourceConv?.userWorkspaces,
+                isOrphaned: Boolean(sourceConv?.isOrphaned),
+                createdTime: Date.now(),
+                lastModifiedTime: Date.now(),
+                stepCount: totalSteps,
+                userMsgs: Math.max(1, Math.round((sourceConv?.userMsgs || 2) * ratio)),
+                modelMsgs: Math.max(0, Math.round((sourceConv?.modelMsgs || 2) * ratio)),
+                toolCalls: 0,
+                estInputTokens: Math.round((sourceConv?.estInputTokens || 1000) * ratio),
+                estOutputTokens: Math.round((sourceConv?.estOutputTokens || 1000) * ratio),
+                estThinkingTokens: 0,
+                estTotalTokens: Math.round((sourceConv?.estTotalTokens || 2000) * ratio),
+                cumulativeTokens: Math.round((sourceConv?.cumulativeTokens || 2000) * ratio),
+                parentConversationId: sourceId,
+                hasTranscript: true,
+                firstMessageSnippet: sourceConv?.firstMessageSnippet || '',
+                searchableContent: '',
+                mtimeMs: Date.now(),
+                size: fs.statSync(path.join(dstLogsDir, 'transcript.jsonl')).size
+            };
+
+            cacheList.unshift(newCached);
+            ConversationManagerProvider.writeDiskCache(cacheList);
+
+            return newId;
+        } catch (e: any) {
+            vscode.window.showErrorMessage('Error during transcript fork: ' + (e?.message || String(e)));
+            return null;
+        }
+    }
+
     private async _requestRename(id: string, oldTitle: string) {
         const newTitle = await vscode.window.showInputBox({
             prompt: 'Enter new conversation title',
@@ -1800,6 +2001,34 @@ export class ConversationManagerProvider {
     padding-bottom: 4px;
     border-bottom: 1px solid var(--border);
   }
+  .msg-header-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .msg-fork-btn {
+    opacity: 0.7;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 7px;
+    font-size: 10.5px;
+    font-weight: 500;
+    line-height: 1.2;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    background: transparent;
+    color: var(--muted);
+  }
+  .msg-bubble:hover .msg-fork-btn {
+    opacity: 1;
+    border-color: rgba(255, 255, 255, 0.22);
+    color: var(--fg);
+  }
+  .msg-fork-btn:hover {
+    background: var(--button-bg, #007acc) !important;
+    color: var(--button-fg, #ffffff) !important;
+    border-color: transparent !important;
+  }
   .msg-role {
     color: var(--fg);
   }
@@ -2244,6 +2473,11 @@ export class ConversationManagerProvider {
       vscode.postMessage({ type: 'copy', text });
     } else if (action === 'jumpConv' && id) {
       selectConversation(id);
+    } else if (action === 'forkFromStep' && id) {
+      const step = parseInt(btn.getAttribute('data-step') || '-1', 10);
+      if (step >= 0) {
+        vscode.postMessage({ type: 'forkConversation', id, stepIndex: step });
+      }
     }
   });
 
@@ -2539,9 +2773,12 @@ export class ConversationManagerProvider {
       const stepLabel = m.stepIndex !== undefined ? ('Step #' + m.stepIndex) : '';
       const timeLabel = m.time ? new Date(m.time).toLocaleTimeString() : '';
       const rightMeta = [stepLabel, timeLabel].filter(Boolean).join(' · ');
+      const forkBtn = (m.stepIndex !== undefined)
+        ? '<button class="btn-mini msg-fork-btn" data-action="forkFromStep" data-id="' + escapeHtml(c.id) + '" data-step="' + m.stepIndex + '" title="Fork conversation from this step (' + stepLabel + ')">Fork</button>'
+        : '';
 
       messagesHtml += '<div class="msg-bubble ' + (isUser ? 'user' : 'assistant') + '">' +
-        '<div class="msg-header"><span class="msg-role">' + roleLabel + '</span><span>' + escapeHtml(rightMeta) + '</span></div>' +
+        '<div class="msg-header"><span class="msg-role">' + roleLabel + '</span><span class="msg-header-right"><span>' + escapeHtml(rightMeta) + '</span>' + forkBtn + '</span></div>' +
         thinkingHtml +
         '<div class="msg-body">' + bodyHighlighted + '</div>' +
         '</div>';
