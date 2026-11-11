@@ -150,6 +150,11 @@ const PATCHED_B3U = 'function b3u(t,e){let i=t?od.parse(t):void 0,n=e?od.parse(e
 // ==========================================
 const ORIGINAL_U5U = '_aa=3,U5u=({cascadeIds:t})=>{let{showPastConversationsPicker:e}=HTn(),i=t.slice(0,_aa),{cascadeContext:{events:{setCascadeId:n}}}=co();return E(Ii,{children:[E("div",{className:"mt-2 flex flex-col justify-center items-center gap-2 md:flex-row md:flex-wrap -mx-2",children:i.map(r=>E(k5u,{cascadeId:r,onClick:()=>{n(r)}},r))}),t.length>_aa&&E("div",{className:"mt-6 cursor-pointer text-left text-sm opacity-30 hover:underline hover:opacity-60",onClick:()=>{e()},children:"See all"})]})}';
 const PATCHED_U5U = '_aa=3,U5u=({cascadeIds:t})=>{let[o,a]=We(!1),i=o?t:t.slice(0,_aa),{cascadeContext:{events:{setCascadeId:n}}}=co();return E(Ii,{children:[E("div",{className:"mt-2 flex flex-col justify-center items-center gap-2 md:flex-row md:flex-wrap -mx-2 max-h-[420px] overflow-y-auto pr-1",children:i.map(r=>E(k5u,{cascadeId:r,onClick:()=>{n(r)}},r))}),t.length>_aa&&E("div",{className:"mt-6 cursor-pointer text-left text-sm opacity-40 hover:underline hover:opacity-80 transition-opacity select-none",onClick:()=>{a(!o)},children:o?"Show less":"See all ("+t.length+")"})]})}';
+// ==========================================
+// Module 13: Hide Non-Actionable Bottom Artifact Cards
+// ==========================================
+const ORIGINAL_UXU = 'k=me(()=>{F&&y(F)},[F,y]);return iy(D?T:void 0,k),_.length===0?null:E(Ii,{children:_.map(M=>{';
+const PATCHED_UXU = 'k=me(()=>{F&&y(F)},[F,y]),_vis=_.filter(M=>{let B=C?.(M),P=B?.requestFeedback===!0&&!g&&e&&!d&&i.length===0,O=dzo(h,M);return(P||O)&&!String(M||"").split(String.fromCharCode(92)).join("/").toLowerCase().includes("/scratch/")});return iy(D?T:void 0,k),_vis.length===0?null:E(Ii,{children:_vis.map(M=>{';
 // Module 0: Silence Integrity / Corrupt Installation Notification
 const ORIGINAL_SHOW_NOTIF = '_showNotification(){const e=this.productService.checksumFailMoreInfoUrl';
 const PATCHED_SHOW_NOTIF = '_showNotification(){return;const e=this.productService.checksumFailMoreInfoUrl';
@@ -483,6 +488,11 @@ async function applyFix(silent = false) {
         wbContent = wbContent.replace(ORIGINAL_SOUND_SWITCH, () => PATCHED_SOUND_SWITCH);
         wbModified = true;
     }
+    // Module 13: Hide Non-Actionable Bottom Artifact Cards
+    if (wbContent.includes(ORIGINAL_UXU)) {
+        wbContent = wbContent.replace(ORIGINAL_UXU, () => PATCHED_UXU);
+        wbModified = true;
+    }
     // Module 6: Register smartFocusConversation & active cascade tracking in workbench
     if (wbContent.includes(PATCHED_SMART_FOCUS_TARGET)) {
         // already on latest
@@ -717,6 +727,10 @@ async function removeFix() {
                 wbContent = wbContent.replace(PATCHED_Y3U_DETAIL, () => ORIGINAL_Y3U_DETAIL);
                 modified = true;
             }
+            if (wbContent.includes(PATCHED_UXU)) {
+                wbContent = wbContent.replace(PATCHED_UXU, () => ORIGINAL_UXU);
+                modified = true;
+            }
             if (modified) {
                 fs.writeFileSync(wbPath, wbContent, 'utf8');
                 const buf = fs.readFileSync(wbPath);
@@ -802,7 +816,7 @@ function activate(context) {
             if (wbContent.includes(ORIGINAL_B5U) || wbContent.includes(ORIGINAL_PD) || wbContent.includes(ORIGINAL_FORK_FLAG) || wbContent.includes(ORIGINAL_FORK_ENABLED_V2) || wbContent.includes(PATCHED_IXU) || wbContent.includes(ORIGINAL_CM_V2)) {
                 needsPatch = true;
             }
-            if (wbContent.includes(OLD_BZT_TYPO) || wbContent.includes(OLD_V3_PATCHED_HHU) || wbContent.includes(OLD_V2_PATCHED_HHU) || wbContent.includes(OLD_V1_PATCHED_HHU) || (!wbContent.includes(PATCHED_HHU) && wbContent.includes(ORIGINAL_HHU))) {
+            if (wbContent.includes(OLD_BZT_TYPO) || wbContent.includes(OLD_V3_PATCHED_HHU) || wbContent.includes(OLD_V2_PATCHED_HHU) || wbContent.includes(OLD_V1_PATCHED_HHU) || (!wbContent.includes(PATCHED_HHU) && wbContent.includes(ORIGINAL_HHU)) || (!wbContent.includes(PATCHED_UXU) && wbContent.includes(ORIGINAL_UXU))) {
                 needsPatch = true;
             }
             if ((!wbContent.includes(PATCHED_SMART_FOCUS_TARGET) && (wbContent.includes(OLD_SMART_FOCUS_TARGET_V2) || wbContent.includes(OLD_SMART_FOCUS_TARGET) || (wbContent.includes(ORIGINAL_SMART_FOCUS_TARGET) && !wbContent.includes('smartFocusConversation')))) || (!wbContent.includes(PATCHED_SNOOZE_V2) && (wbContent.includes(OLD_SNOOZE_V2) || (wbContent.includes(ORIGINAL_SNOOZE_V2) && !wbContent.includes('smartFocusConversation')))) || wbContent.includes(ORIGINAL_SET_CASCADE_ID)) {
