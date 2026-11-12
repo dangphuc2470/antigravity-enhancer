@@ -2608,7 +2608,9 @@ export class ConversationManagerProvider {
     border: 1px solid rgba(255, 255, 255, 0.1);
   }
   .msg-fork-btn {
-    opacity: 0.75;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 9999px;
@@ -2620,8 +2622,11 @@ export class ConversationManagerProvider {
     transition: all 0.18s cubic-bezier(0.2, 0, 0, 1);
     color: var(--fg);
   }
-  .msg-bubble:hover .msg-fork-btn {
+  .msg-bubble:hover .msg-fork-btn,
+  .msg-fork-btn:focus-visible {
     opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
     border-color: rgba(255, 255, 255, 0.25);
   }
   .msg-fork-btn:hover {
@@ -2922,6 +2927,14 @@ export class ConversationManagerProvider {
 <script>
   const vscode = acquireVsCodeApi();
 
+  let initialDetailSort = 'newest';
+  try {
+    const savedDetailSort = localStorage.getItem('cm_detail_sort_order');
+    if (savedDetailSort === 'oldest' || savedDetailSort === 'newest') {
+      initialDetailSort = savedDetailSort;
+    }
+  } catch (_) {}
+
   let state = {
     tree: [],
     conversations: [],
@@ -2944,6 +2957,7 @@ export class ConversationManagerProvider {
     searchQuery: '',
     searchMode: 'all',
     sortBy: 'recent',
+    detailSortOrder: initialDetailSort,
     detail: null,
     matchesOnly: false,
     expandedFolders: new Set()
@@ -3121,6 +3135,10 @@ export class ConversationManagerProvider {
       vscode.postMessage({ type: 'openTrafficReport' });
     } else if (action === 'openFind') {
       openFindWidget();
+    } else if (action === 'toggleDetailSort') {
+      state.detailSortOrder = state.detailSortOrder === 'newest' ? 'oldest' : 'newest';
+      try { localStorage.setItem('cm_detail_sort_order', state.detailSortOrder); } catch (_) {}
+      renderDetailPane();
     } else if (action === 'copy') {
       const text = btn.getAttribute('data-copy') || '';
       vscode.postMessage({ type: 'copy', text });
@@ -3402,6 +3420,10 @@ export class ConversationManagerProvider {
       msgEntries.push({ m, thinkMatch });
     }
 
+    if (state.detailSortOrder === 'newest') {
+      msgEntries.reverse();
+    }
+
     let messagesHtml = '';
     for (const entry of msgEntries) {
       const m = entry.m;
@@ -3428,6 +3450,10 @@ export class ConversationManagerProvider {
 
     const totalMsgs = (c.userMsgs || 0) + (c.modelMsgs || 0);
     const thinkingNote = c.estThinkingTokens ? (' (' + formatNumber(c.estThinkingTokens) + ' think)') : '';
+    const isNewestFirst = state.detailSortOrder === 'newest';
+    const sortIcon = isNewestFirst
+      ? '<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-1px;margin-right:4px;"><path d="M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z"/></svg>'
+      : '<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-1px;margin-right:4px;"><path d="m7.247 4.86-4.796 5.481c-.566.647-.106 1.659.753 1.659h9.592a1 1 0 0 0 .753-1.659l-4.796-5.48a1 1 0 0 0-1.506 0z"/></svg>';
 
     container.innerHTML =
       '<div class="detail-header">' +
@@ -3435,6 +3461,7 @@ export class ConversationManagerProvider {
         '<div class="detail-actions">' +
           '<button class="btn-primary" data-action="openInChat" data-id="' + escapeHtml(c.id) + '">Open in Chat</button>' +
           '<button class="btn-secondary" data-action="syncSingleConversation" data-id="' + escapeHtml(c.id) + '" title="Sync this conversation between IDE and App (~/.gemini/antigravity)">Sync</button>' +
+          '<button class="btn-secondary" data-action="toggleDetailSort" title="Switch message order (' + (isNewestFirst ? 'Newest first' : 'Oldest first') + ')">' + sortIcon + (isNewestFirst ? 'Newest First' : 'Oldest First') + '</button>' +
           '<button class="btn-secondary" data-action="openFind" title="Find in conversation (Ctrl+F)">Find</button>' +
           '<button class="btn-secondary" data-action="openTranscriptLog" data-id="' + escapeHtml(c.id) + '">View Log</button>' +
         '</div>' +
