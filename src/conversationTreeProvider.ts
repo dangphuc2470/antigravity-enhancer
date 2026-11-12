@@ -541,7 +541,7 @@ export class ConversationExplorerViewProvider implements vscode.WebviewViewProvi
         const isCur = state.selectedFolder === 'CURRENT';
         html += '<div class="tree-item ' + (isCur ? 'active' : '') + '" style="padding-left:8px" data-folder="CURRENT">' +
           '<span class="tree-chevron"></span>' +
-          '<svg class="tree-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.251.068a.5.5 0 0 1 .42.58L10.477 6.5H14a.5.5 0 0 1 .372.832l-9.5 10.5a.5.5 0 0 1-.84-.528l1.2-5.804H1.5a.5.5 0 0 1-.372-.832l9.5-10.5a.5.5 0 0 1 .623-.1z"/></svg>' +
+          '<svg class="tree-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color:#388bfd"><path d="M1.5 3.5l.5-.5h4.79l.86.85.35.15H14.5l.5.5v3.1a3.5 3.5 0 0 0-1-.1H14V5H7.5L6.65 4.15 6.29 4H2v8h4.05c.08.35.21.68.39 1H1.5l-.5-.5v-9z"/><circle cx="12" cy="12" r="2.5"/></svg>' +
           '<span class="tree-label">Current Workspace</span>' +
           '<span class="tree-badge">' + (state.currentWorkspaceCount || 0) + '</span>' +
           '</div>';

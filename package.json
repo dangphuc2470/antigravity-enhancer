@@ -2,7 +2,7 @@
   "name": "antigravity-enhancer",
   "displayName": "Antigravity Enhancer",
   "description": "Essential UX enhancements and native workflow patches for Google Antigravity IDE: instant clipboard paste, seamless cross-workspace switching, conversation forking, workspace chat tabs, auto-submit permission prompts, and notification focus.",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "publisher": "dangphuc2470",
   "author": {
     "name": "dangphuc2470",
@@ -136,7 +136,7 @@
         "displayName": "Open with Default Application",
         "selector": [
           {
-            "filenamePattern": "*.{exe,msi,doc,docx,docm,dotx,dotm,rtf,xls,xlsx,xlsm,xlsb,xltx,xltm,ppt,pptx,pptm,pps,ppsx,vsd,vsdx,one,pdf,zip,rar,7z,tar,gz,bz2,xz,iso,mp4,mkv,avi,mov,wmv,flv,webm,m4v,mp3,wav,flac,aac,m4a,ogg,wma,psd,ai,blend,fbx,obj,stl,3ds,c4d,max,apk,aab,ipa,dmg,pkg}"
+            "filenamePattern": "*.{exe,msi,vsix,crx,deb,rpm,jar,war,aar,apk,aab,ipa,dmg,pkg,doc,docx,docm,dotx,dotm,rtf,xls,xlsx,xlsm,xlsb,xltx,xltm,ppt,pptx,pptm,pps,ppsx,vsd,vsdx,one,pdf,zip,rar,7z,tar,gz,bz2,xz,iso,bin,wasm,dll,dylib,so,db,sqlite,sqlite3,mp4,mkv,avi,mov,wmv,flv,webm,m4v,mp3,wav,flac,aac,m4a,ogg,wma,psd,ai,blend,fbx,obj,stl,3ds,c4d,max}"
           }
         ],
         "priority": "default"
