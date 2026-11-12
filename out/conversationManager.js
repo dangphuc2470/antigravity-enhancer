@@ -3421,15 +3421,17 @@ class ConversationManagerProvider {
       : '<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-1px;margin-right:4px;"><path d="m7.247 4.86-4.796 5.481c-.566.647-.106 1.659.753 1.659h9.592a1 1 0 0 0 .753-1.659l-4.796-5.48a1 1 0 0 0-1.506 0z"/></svg>';
 
     const isDetailCollapsed = Boolean(state.detailCollapsed);
-    const detailChevron = '<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-1px;margin-right:4px;transform:' + (isDetailCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)') + ';transition:transform 0.2s ease;"><path d="M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z"/></svg>';
+    const detailChevron = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="transform:' + (isDetailCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)') + ';transition:transform 0.2s ease;"><path d="M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z"/></svg>';
 
     container.innerHTML =
       '<div class="detail-header">' +
-        '<div class="detail-title" title="' + escapeHtml(c.title) + '">' + escapeHtml(c.title) + '</div>' +
+        '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1;">' +
+          '<button class="btn-secondary" data-action="toggleDetailCollapse" title="' + (isDetailCollapsed ? 'Expand conversation stats & metadata' : 'Collapse conversation stats & metadata') + '" style="padding:2px 6px;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;flex-shrink:0;">' + detailChevron + '</button>' +
+          '<div class="detail-title" title="' + escapeHtml(c.title) + '">' + escapeHtml(c.title) + '</div>' +
+        '</div>' +
         '<div class="detail-actions">' +
           '<button class="btn-primary" data-action="openInChat" data-id="' + escapeHtml(c.id) + '">Open in Chat</button>' +
           '<button class="btn-secondary" data-action="openFind" title="Find in conversation (Ctrl+F)">Find</button>' +
-          '<button class="btn-secondary" data-action="toggleDetailCollapse" title="' + (isDetailCollapsed ? 'Expand conversation stats & metadata' : 'Collapse conversation stats & metadata') + '">' + detailChevron + (isDetailCollapsed ? 'Show Info' : 'Hide Info') + '</button>' +
           '<button class="btn-secondary" data-action="toggleDetailSort" title="Switch message order (' + (isNewestFirst ? 'Newest first' : 'Oldest first') + ')">' + sortIcon + (isNewestFirst ? 'Newest First' : 'Oldest First') + '</button>' +
         '</div>' +
       '</div>' +
