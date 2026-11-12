@@ -2151,19 +2151,26 @@ export class ConversationManagerProvider {
 
   /* Folder Overview Panel (Material You inspired, Dark Mode VS Code) */
   .folder-overview {
-    padding: 10px 12px 10px 12px;
+    padding: 0 12px 10px 12px;
     background: var(--vscode-sideBar-background, rgba(255, 255, 255, 0.025));
     border-bottom: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
     flex-shrink: 0;
+  }
+  .folder-overview.collapsed {
+    padding-bottom: 0;
+    gap: 0;
   }
   .overview-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+    height: 51px;
+    min-height: 51px;
+    box-sizing: border-box;
   }
   .overview-title {
     display: flex;
@@ -2412,7 +2419,10 @@ export class ConversationManagerProvider {
     min-width: 0;
   }
   .detail-header {
-    padding: 12px 20px;
+    padding: 0 20px;
+    height: 52px;
+    min-height: 52px;
+    box-sizing: border-box;
     border-bottom: 1px solid var(--border);
     background: var(--vscode-sideBar-background, rgba(255, 255, 255, 0.025));
     display: flex;
@@ -3321,6 +3331,7 @@ export class ConversationManagerProvider {
     const apiTraffic = (typeof state.folderCumulativeTokens === 'number') ? state.folderCumulativeTokens : tokens;
 
     const isOvCollapsed = Boolean(state.overviewCollapsed);
+    container.classList.toggle('collapsed', isOvCollapsed);
     const ovChevron = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="transform:' + (isOvCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)') + ';transition:transform 0.2s ease;"><path d="M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z"/></svg>';
 
     container.innerHTML =

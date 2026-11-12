@@ -592,6 +592,9 @@ class ConversationExplorerViewProvider {
       container.innerHTML = html;
     }
 
+    let lastClickFolder = null;
+    let lastClickTime = 0;
+
     document.getElementById('folderTree').addEventListener('click', e => {
       const toggleEl = e.target.closest('[data-toggle]');
       if (toggleEl) {
@@ -610,24 +613,24 @@ class ConversationExplorerViewProvider {
       if (itemEl) {
         const folder = itemEl.getAttribute('data-folder');
         if (folder) {
+          const now = Date.now();
+          const isDblClick = (folder === lastClickFolder && (now - lastClickTime) < 400) || e.detail >= 2;
+          if (isDblClick) {
+            lastClickTime = 0;
+            lastClickFolder = null;
+            if (state.expandedFolders.has(folder)) {
+              state.expandedFolders.delete(folder);
+            } else {
+              state.expandedFolders.add(folder);
+            }
+            renderFolderTree();
+            return;
+          }
+          lastClickFolder = folder;
+          lastClickTime = now;
           state.selectedFolder = folder;
           renderFolderTree();
           vscode.postMessage({ type: 'selectFolder', folder });
-        }
-      }
-    });
-
-    document.getElementById('folderTree').addEventListener('dblclick', e => {
-      const itemEl = e.target.closest('.tree-item');
-      if (itemEl) {
-        const folder = itemEl.getAttribute('data-folder');
-        if (folder) {
-          if (state.expandedFolders.has(folder)) {
-            state.expandedFolders.delete(folder);
-          } else {
-            state.expandedFolders.add(folder);
-          }
-          renderFolderTree();
         }
       }
     });
