@@ -617,6 +617,21 @@ class ConversationExplorerViewProvider {
       }
     });
 
+    document.getElementById('folderTree').addEventListener('dblclick', e => {
+      const itemEl = e.target.closest('.tree-item');
+      if (itemEl) {
+        const folder = itemEl.getAttribute('data-folder');
+        if (folder) {
+          if (state.expandedFolders.has(folder)) {
+            state.expandedFolders.delete(folder);
+          } else {
+            state.expandedFolders.add(folder);
+          }
+          renderFolderTree();
+        }
+      }
+    });
+
     document.getElementById('chkSubfolders').addEventListener('change', e => {
       state.includeSubfolders = e.target.checked;
       renderFolderTree();

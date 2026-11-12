@@ -2872,6 +2872,13 @@ class ConversationManagerProvider {
     }
   } catch (_) {}
 
+  let initialDetailCollapsed = false;
+  let initialOverviewCollapsed = false;
+  try {
+    initialDetailCollapsed = localStorage.getItem('cm_detail_collapsed') === 'true';
+    initialOverviewCollapsed = localStorage.getItem('cm_overview_collapsed') === 'true';
+  } catch (_) {}
+
   let state = {
     tree: [],
     conversations: [],
@@ -2895,6 +2902,8 @@ class ConversationManagerProvider {
     searchMode: 'all',
     sortBy: 'recent',
     detailSortOrder: initialDetailSort,
+    detailCollapsed: initialDetailCollapsed,
+    overviewCollapsed: initialOverviewCollapsed,
     detail: null,
     matchesOnly: false,
     expandedFolders: new Set()
@@ -3076,6 +3085,10 @@ class ConversationManagerProvider {
       state.detailSortOrder = state.detailSortOrder === 'newest' ? 'oldest' : 'newest';
       try { localStorage.setItem('cm_detail_sort_order', state.detailSortOrder); } catch (_) {}
       renderDetailPane();
+    } else if (action === 'toggleDetailCollapse') {
+      state.detailCollapsed = !state.detailCollapsed;
+      try { localStorage.setItem('cm_detail_collapsed', String(state.detailCollapsed)); } catch (_) {}
+      renderDetailPane();
     } else if (action === 'copy') {
       const text = btn.getAttribute('data-copy') || '';
       vscode.postMessage({ type: 'copy', text });
@@ -3090,6 +3103,13 @@ class ConversationManagerProvider {
   });
 
   document.getElementById('folderOverview').addEventListener('click', ev => {
+    const collapseBtn = ev.target.closest('[data-action="toggleOverviewCollapse"]');
+    if (collapseBtn) {
+      state.overviewCollapsed = !state.overviewCollapsed;
+      try { localStorage.setItem('cm_overview_collapsed', String(state.overviewCollapsed)); } catch (_) {}
+      renderFolderOverview();
+      return;
+    }
     const btn = ev.target.closest('[data-action="openTrafficReport"]');
     if (btn) {
       vscode.postMessage({ type: 'openTrafficReport' });
@@ -3237,36 +3257,44 @@ class ConversationManagerProvider {
 
     const apiTraffic = (typeof state.folderCumulativeTokens === 'number') ? state.folderCumulativeTokens : tokens;
 
+    const isOvCollapsed = Boolean(state.overviewCollapsed);
+    const ovChevron = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="transform:' + (isOvCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)') + ';transition:transform 0.2s ease;"><path d="M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z"/></svg>';
+
     container.innerHTML =
       '<div class="overview-header">' +
         '<div class="overview-title" title="' + escapeHtml(state.selectedFolder) + '">' +
           iconSvg +
           '<span class="overview-name">' + escapeHtml(fName) + '</span>' +
         '</div>' +
-        '<span class="overview-scope-badge">' + scopeLabel + '</span>' +
+        '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">' +
+          '<span class="overview-scope-badge">' + scopeLabel + '</span>' +
+          '<button class="btn-secondary" data-action="toggleOverviewCollapse" title="' + (isOvCollapsed ? 'Expand overview stats' : 'Collapse overview stats') + '" style="padding:2px 6px;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;">' + ovChevron + '</button>' +
+        '</div>' +
       '</div>' +
-      '<div class="overview-cards">' +
-        '<div class="m3-stat-card">' +
-          '<div class="m3-label">Conversations</div>' +
-          '<div class="m3-value">' + count + '</div>' +
-          '<div class="m3-sub" title="' + escapeHtml(convSub) + '">' + escapeHtml(convSub) + '</div>' +
-        '</div>' +
-        '<div class="m3-stat-card">' +
-          '<div class="m3-label">Messages</div>' +
-          '<div class="m3-value">' + formatNumber(msgs) + '</div>' +
-          '<div class="m3-sub" title="' + escapeHtml(msgSub) + '">' + escapeHtml(msgSub) + '</div>' +
-        '</div>' +
-        '<div class="m3-stat-card">' +
-          '<div class="m3-label">Context Memory</div>' +
-          '<div class="m3-value">~' + formatNumber(tokens) + '</div>' +
-          '<div class="m3-sub">active context</div>' +
-        '</div>' +
-        '<div class="m3-stat-card clickable" id="cardApiTraffic" data-action="openTrafficReport" title="Click to open detailed API Traffic & Token Report" style="cursor:pointer;">' +
-          '<div class="m3-label">API Traffic (Full)</div>' +
-          '<div class="m3-value">~' + formatNumber(apiTraffic) + '</div>' +
-          '<div class="m3-sub">Cumulative &middot; View Report &rarr;</div>' +
-        '</div>' +
-      '</div>';
+      (isOvCollapsed ? '' : (
+        '<div class="overview-cards">' +
+          '<div class="m3-stat-card">' +
+            '<div class="m3-label">Conversations</div>' +
+            '<div class="m3-value">' + count + '</div>' +
+            '<div class="m3-sub" title="' + escapeHtml(convSub) + '">' + escapeHtml(convSub) + '</div>' +
+          '</div>' +
+          '<div class="m3-stat-card">' +
+            '<div class="m3-label">Messages</div>' +
+            '<div class="m3-value">' + formatNumber(msgs) + '</div>' +
+            '<div class="m3-sub" title="' + escapeHtml(msgSub) + '">' + escapeHtml(msgSub) + '</div>' +
+          '</div>' +
+          '<div class="m3-stat-card">' +
+            '<div class="m3-label">Context Memory</div>' +
+            '<div class="m3-value">~' + formatNumber(tokens) + '</div>' +
+            '<div class="m3-sub">active context</div>' +
+          '</div>' +
+          '<div class="m3-stat-card clickable" id="cardApiTraffic" data-action="openTrafficReport" title="Click to open detailed API Traffic & Token Report" style="cursor:pointer;">' +
+            '<div class="m3-label">API Traffic (Full)</div>' +
+            '<div class="m3-value">~' + formatNumber(apiTraffic) + '</div>' +
+            '<div class="m3-sub">Cumulative &middot; View Report &rarr;</div>' +
+          '</div>' +
+        '</div>'
+      ));
   }
 
   function renderConversationList() {
@@ -3392,50 +3420,54 @@ class ConversationManagerProvider {
       ? '<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-1px;margin-right:4px;"><path d="M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z"/></svg>'
       : '<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-1px;margin-right:4px;"><path d="m7.247 4.86-4.796 5.481c-.566.647-.106 1.659.753 1.659h9.592a1 1 0 0 0 .753-1.659l-4.796-5.48a1 1 0 0 0-1.506 0z"/></svg>';
 
+    const isDetailCollapsed = Boolean(state.detailCollapsed);
+    const detailChevron = '<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-1px;margin-right:4px;transform:' + (isDetailCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)') + ';transition:transform 0.2s ease;"><path d="M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z"/></svg>';
+
     container.innerHTML =
       '<div class="detail-header">' +
         '<div class="detail-title" title="' + escapeHtml(c.title) + '">' + escapeHtml(c.title) + '</div>' +
         '<div class="detail-actions">' +
           '<button class="btn-primary" data-action="openInChat" data-id="' + escapeHtml(c.id) + '">Open in Chat</button>' +
-          '<button class="btn-secondary" data-action="syncSingleConversation" data-id="' + escapeHtml(c.id) + '" title="Sync this conversation between IDE and App (~/.gemini/antigravity)">Sync</button>' +
-          '<button class="btn-secondary" data-action="toggleDetailSort" title="Switch message order (' + (isNewestFirst ? 'Newest first' : 'Oldest first') + ')">' + sortIcon + (isNewestFirst ? 'Newest First' : 'Oldest First') + '</button>' +
           '<button class="btn-secondary" data-action="openFind" title="Find in conversation (Ctrl+F)">Find</button>' +
-          '<button class="btn-secondary" data-action="openTranscriptLog" data-id="' + escapeHtml(c.id) + '">View Log</button>' +
+          '<button class="btn-secondary" data-action="toggleDetailCollapse" title="' + (isDetailCollapsed ? 'Expand conversation stats & metadata' : 'Collapse conversation stats & metadata') + '">' + detailChevron + (isDetailCollapsed ? 'Show Info' : 'Hide Info') + '</button>' +
+          '<button class="btn-secondary" data-action="toggleDetailSort" title="Switch message order (' + (isNewestFirst ? 'Newest first' : 'Oldest first') + ')">' + sortIcon + (isNewestFirst ? 'Newest First' : 'Oldest First') + '</button>' +
         '</div>' +
       '</div>' +
 
-      '<div class="detail-stats">' +
-        '<div class="m3-stat-card">' +
-          '<span class="m3-label">Messages</span>' +
-          '<span class="m3-value">' + totalMsgs + ' total</span>' +
-          '<span class="m3-sub">' + (c.userMsgs || 0) + ' user / ' + (c.modelMsgs || 0) + ' AI · ' + (c.toolCalls || 0) + ' tools</span>' +
+      (isDetailCollapsed ? '' : (
+        '<div class="detail-stats">' +
+          '<div class="m3-stat-card">' +
+            '<span class="m3-label">Messages</span>' +
+            '<span class="m3-value">' + totalMsgs + ' total</span>' +
+            '<span class="m3-sub">' + (c.userMsgs || 0) + ' user / ' + (c.modelMsgs || 0) + ' AI · ' + (c.toolCalls || 0) + ' tools</span>' +
+          '</div>' +
+          '<div class="m3-stat-card">' +
+            '<span class="m3-label">Context Memory</span>' +
+            '<span class="m3-value">~' + formatNumber(c.estTotalTokens) + '</span>' +
+            '<span class="m3-sub">' + formatNumber(c.estInputTokens) + ' in / ' + formatNumber(c.estOutputTokens) + ' out' + thinkingNote + '</span>' +
+          '</div>' +
+          '<div class="m3-stat-card clickable" data-action="openTrafficReport" title="Click to open detailed API Traffic & Token Report" style="cursor:pointer;">' +
+            '<span class="m3-label">API Traffic (Full)</span>' +
+            '<span class="m3-value">~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + '</span>' +
+            '<span class="m3-sub">' + (c.modelMsgs || 0) + ' reqs &middot; Cumulative &rarr;</span>' +
+          '</div>' +
+          '<div class="m3-stat-card">' +
+            '<span class="m3-label">Duration</span>' +
+            '<span class="m3-value">' + durationStr + '</span>' +
+            '<span class="m3-sub">Updated ' + formatTime(c.lastModifiedTime) + '</span>' +
+          '</div>' +
         '</div>' +
-        '<div class="m3-stat-card">' +
-          '<span class="m3-label">Context Memory</span>' +
-          '<span class="m3-value">~' + formatNumber(c.estTotalTokens) + '</span>' +
-          '<span class="m3-sub">' + formatNumber(c.estInputTokens) + ' in / ' + formatNumber(c.estOutputTokens) + ' out' + thinkingNote + '</span>' +
-        '</div>' +
-        '<div class="m3-stat-card clickable" data-action="openTrafficReport" title="Click to open detailed API Traffic & Token Report" style="cursor:pointer;">' +
-          '<span class="m3-label">API Traffic (Full)</span>' +
-          '<span class="m3-value">~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + '</span>' +
-          '<span class="m3-sub">' + (c.modelMsgs || 0) + ' reqs &middot; Cumulative &rarr;</span>' +
-        '</div>' +
-        '<div class="m3-stat-card">' +
-          '<span class="m3-label">Duration</span>' +
-          '<span class="m3-value">' + durationStr + '</span>' +
-          '<span class="m3-sub">Updated ' + formatTime(c.lastModifiedTime) + '</span>' +
-        '</div>' +
-      '</div>' +
 
-      '<div class="metadata-bar">' +
-        '<div class="m3-chip"><b>Source:</b> ' + (c.source === 'app' ? '<span class="source-tag app">App</span> <span>Standalone (~/.gemini/antigravity)</span>' : (c.source === 'both' ? '<span class="source-tag both">Both</span> <span>Synced (IDE &amp; App)</span>' : '<span class="source-tag ide">IDE</span> <span>Antigravity IDE (~/.gemini/antigravity-ide)</span>')) + '</div>' +
-        '<div class="m3-chip"><b>ID:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="copy" data-copy="' + escapeHtml(c.id) + '" title="Click to copy full ID">' + escapeHtml(c.id) + '</span></div>' +
-        '<div class="m3-chip"><b>Workspace:</b> <span class="meta-link" data-action="copy" data-copy="' + escapeHtml(wsStr) + '" title="' + wsFullTitle + ' (click to copy)">' + wsDisplay + '</span></div>' +
-        '<div class="m3-chip"><b>Steps:</b> <span>' + c.stepCount + ' (' + (c.hasTranscript ? 'Transcript' : 'DB') + ')</span></div>' +
-        '<div class="m3-chip"><b>Created:</b> <span>' + escapeHtml(createdStr) + '</span></div>' +
-        '<div class="m3-chip"><b>Modified:</b> <span>' + escapeHtml(modifiedStr) + '</span></div>' +
-        (c.parentConversationId ? ('<div class="m3-chip"><b>Forked:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="jumpConv" data-id="' + escapeHtml(c.parentConversationId) + '" title="Open parent conversation">' + escapeHtml(c.parentConversationId.slice(0, 8)) + '...</span></div>') : '') +
-      '</div>' +
+        '<div class="metadata-bar">' +
+          '<div class="m3-chip"><b>Source:</b> ' + (c.source === 'app' ? '<span class="source-tag app">App</span> <span>Standalone (~/.gemini/antigravity)</span>' : (c.source === 'both' ? '<span class="source-tag both">Both</span> <span>Synced (IDE &amp; App)</span>' : '<span class="source-tag ide">IDE</span> <span>Antigravity IDE (~/.gemini/antigravity-ide)</span>')) + '</div>' +
+          '<div class="m3-chip"><b>ID:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="copy" data-copy="' + escapeHtml(c.id) + '" title="Click to copy full ID">' + escapeHtml(c.id) + '</span></div>' +
+          '<div class="m3-chip"><b>Workspace:</b> <span class="meta-link" data-action="copy" data-copy="' + escapeHtml(wsStr) + '" title="' + wsFullTitle + ' (click to copy)">' + wsDisplay + '</span></div>' +
+          '<div class="m3-chip"><b>Steps:</b> <span>' + c.stepCount + ' (' + (c.hasTranscript ? 'Transcript' : 'DB') + ')</span></div>' +
+          '<div class="m3-chip"><b>Created:</b> <span>' + escapeHtml(createdStr) + '</span></div>' +
+          '<div class="m3-chip"><b>Modified:</b> <span>' + escapeHtml(modifiedStr) + '</span></div>' +
+          (c.parentConversationId ? ('<div class="m3-chip"><b>Forked:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="jumpConv" data-id="' + escapeHtml(c.parentConversationId) + '" title="Open parent conversation">' + escapeHtml(c.parentConversationId.slice(0, 8)) + '...</span></div>') : '') +
+        '</div>'
+      )) +
 
       (q ? (
         '<div class="detail-search-bar">' +
