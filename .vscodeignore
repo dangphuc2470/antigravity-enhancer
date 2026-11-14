@@ -1,0 +1,9 @@
+.vscode/**
+.vscode-test/**
+src/**
+.git/**
+.gitignore
+**/*.map
+*.app/**
+*.vsix
+*.log

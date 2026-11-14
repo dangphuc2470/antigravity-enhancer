@@ -667,10 +667,35 @@ class ConversationExplorerViewProvider {
       vscode.postMessage({ type: 'export' });
     });
 
+    function expandToFolder(targetPath) {
+      if (!targetPath || targetPath === 'ALL' || targetPath === 'CURRENT') return;
+      const normTarget = targetPath.toLowerCase().replace(/\\/g, '/');
+      function checkNode(node) {
+        if (!node || !node.fullPath) return;
+        const nodePath = node.fullPath.toLowerCase().replace(/\\/g, '/');
+        if (normTarget === nodePath || normTarget.startsWith(nodePath.endsWith('/') ? nodePath : nodePath + '/')) {
+          state.expandedFolders.add(node.fullPath);
+          if (Array.isArray(node.children)) {
+            for (const child of node.children) {
+              checkNode(child);
+            }
+          }
+        }
+      }
+      if (Array.isArray(state.tree)) {
+        for (const root of state.tree) {
+          checkNode(root);
+        }
+      }
+    }
+
     window.addEventListener('message', event => {
       const msg = event.data;
       if (msg.type === 'state') {
         state = { ...state, ...msg };
+        if (state.selectedFolder && state.selectedFolder !== 'ALL') {
+          expandToFolder(state.selectedFolder);
+        }
         if (state.expandedFolders.size === 0 && Array.isArray(state.tree)) {
           for (const r of state.tree) {
             state.expandedFolders.add(r.fullPath);
@@ -678,6 +703,10 @@ class ConversationExplorerViewProvider {
         }
         document.getElementById('chkSubfolders').checked = Boolean(state.includeSubfolders);
         renderFolderTree();
+        setTimeout(() => {
+          const activeEl = document.querySelector('.tree-item.active');
+          if (activeEl) activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 50);
       }
     });
 

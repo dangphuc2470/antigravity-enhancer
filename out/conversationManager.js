@@ -41,6 +41,35 @@ const os = __importStar(require("os"));
 const readline = __importStar(require("readline"));
 const crypto = __importStar(require("crypto"));
 class ConversationManagerProvider {
+    static readUserMetadata() {
+        try {
+            if (fs.existsSync(ConversationManagerProvider.USER_METADATA_FILE)) {
+                const raw = JSON.parse(fs.readFileSync(ConversationManagerProvider.USER_METADATA_FILE, 'utf8'));
+                if (raw && typeof raw === 'object')
+                    return raw;
+            }
+        }
+        catch (_) { }
+        return {};
+    }
+    static writeUserMetadata(data) {
+        try {
+            const dir = path.dirname(ConversationManagerProvider.USER_METADATA_FILE);
+            if (!fs.existsSync(dir))
+                fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(ConversationManagerProvider.USER_METADATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+        }
+        catch (_) { }
+    }
+    static updateUserMetadata(id, update) {
+        try {
+            const all = ConversationManagerProvider.readUserMetadata();
+            const existing = all[id] || {};
+            all[id] = { ...existing, ...update, updatedAt: Date.now() };
+            ConversationManagerProvider.writeUserMetadata(all);
+        }
+        catch (_) { }
+    }
     static createOrShow(extensionUri, initialFolder) {
         const column = vscode.window.activeTextEditor
             ? vscode.window.activeTextEditor.viewColumn
@@ -176,6 +205,16 @@ class ConversationManagerProvider {
                         await ConversationManagerProvider.syncSingleConversation(message.id);
                     }
                     break;
+                case 'toggleStar':
+                    if (typeof message.id === 'string') {
+                        await this._toggleStar(message.id);
+                    }
+                    break;
+                case 'updateNotes':
+                    if (typeof message.id === 'string') {
+                        await this._updateNotes(message.id, message.notes || '');
+                    }
+                    break;
             }
         }, null, this._disposables);
         this._loadConversations();
@@ -220,6 +259,24 @@ class ConversationManagerProvider {
     async _openTrafficReport() {
         const { TrafficReportPanel } = require('./trafficReportPanel');
         TrafficReportPanel.createOrShow(this._extensionUri, this._conversations);
+    }
+    async _toggleStar(id) {
+        const conv = this._conversations.find(c => c.id === id);
+        if (!conv)
+            return;
+        conv.isStarred = !conv.isStarred;
+        ConversationManagerProvider.updateUserMetadata(id, { isStarred: conv.isStarred });
+        this._writeDiskCache(this._conversations);
+        this._sendFilteredList();
+    }
+    async _updateNotes(id, notes) {
+        const conv = this._conversations.find(c => c.id === id);
+        if (!conv)
+            return;
+        conv.notes = (notes || '').trim();
+        ConversationManagerProvider.updateUserMetadata(id, { notes: conv.notes });
+        this._writeDiskCache(this._conversations);
+        this._sendFilteredList();
     }
     static normalizePath(uriOrPath) {
         try {
@@ -670,9 +727,21 @@ class ConversationManagerProvider {
                             if (!item.source) {
                                 item.source = ConversationManagerProvider.detectConversationSource(item.id);
                             }
+                            item.isStarred = Boolean(item.isStarred);
+                            item.notes = typeof item.notes === 'string' ? item.notes : '';
                             list.push(item);
                         }
                     }
+                }
+            }
+            const userMeta = ConversationManagerProvider.readUserMetadata();
+            for (const it of list) {
+                const m = userMeta[it.id];
+                if (m) {
+                    if (typeof m.isStarred === 'boolean')
+                        it.isStarred = m.isStarred;
+                    if (typeof m.notes === 'string')
+                        it.notes = m.notes;
                 }
             }
         }
@@ -1011,6 +1080,16 @@ class ConversationManagerProvider {
                 };
                 result.push(item);
             }
+            const userMeta = ConversationManagerProvider.readUserMetadata();
+            for (const item of result) {
+                const m = userMeta[item.id];
+                if (m) {
+                    if (typeof m.isStarred === 'boolean')
+                        item.isStarred = m.isStarred;
+                    if (typeof m.notes === 'string')
+                        item.notes = m.notes;
+                }
+            }
             this._conversations = result;
             this._writeDiskCache(result);
             this._sendState();
@@ -1203,10 +1282,16 @@ class ConversationManagerProvider {
             folderTotalSteps += c.stepCount || 0;
         }
         let list = [...folderList];
-        const q = this._searchQuery.trim().toLowerCase();
+        if (this._searchMode === 'starred') {
+            list = list.filter(c => Boolean(c.isStarred));
+        }
+        else if (this._searchMode === 'notes') {
+            list = list.filter(c => Boolean(c.notes && c.notes.trim()));
+        }
+        const q = (this._searchQuery || '').trim().normalize('NFC').toLowerCase();
         if (q) {
             list = list.filter(c => {
-                const titleMatch = c.title.toLowerCase().includes(q);
+                const titleMatch = (c.title || '').normalize('NFC').toLowerCase().includes(q);
                 if (this._searchMode === 'title')
                     return titleMatch;
                 const wsMatch = (c.workspaces || []).some(w => w.toLowerCase().includes(q))
@@ -1215,13 +1300,16 @@ class ConversationManagerProvider {
                     || (c.workspaces.length === 0 && 'standalone'.includes(q));
                 if (this._searchMode === 'path')
                     return wsMatch;
+                const noteMatch = (c.notes || '').normalize('NFC').toLowerCase().includes(q);
+                if (this._searchMode === 'notes')
+                    return noteMatch || titleMatch;
                 const snippetMatch = (c.firstMessageSnippet || '').toLowerCase().includes(q);
                 const contentMatch = (c.searchableContent || '').toLowerCase().includes(q);
                 const idMatch = c.id.toLowerCase().includes(q);
                 if (this._searchMode === 'content') {
-                    return contentMatch || snippetMatch;
+                    return contentMatch || snippetMatch || noteMatch;
                 }
-                return titleMatch || contentMatch || snippetMatch || idMatch || wsMatch;
+                return titleMatch || contentMatch || snippetMatch || idMatch || wsMatch || noteMatch;
             });
         }
         list.sort((a, b) => {
@@ -1253,7 +1341,12 @@ class ConversationManagerProvider {
                     matchSnippet = (start > 0 ? '...' : '') + c.searchableContent.slice(start, end) + (end < c.searchableContent.length ? '...' : '');
                 }
             }
-            if (this._searchMode === 'path' || (!c.searchableContent && (c.workspaces || []).some(w => w.toLowerCase().includes(q)))) {
+            if (q && c.notes && c.notes.toLowerCase().includes(q)) {
+                if (!c.searchableContent || !c.searchableContent.toLowerCase().includes(q)) {
+                    matchSnippet = 'Note: ' + c.notes;
+                }
+            }
+            if (this._searchMode === 'path' || (!c.searchableContent && !c.notes && (c.workspaces || []).some(w => w.toLowerCase().includes(q)))) {
                 const matchedWs = (c.workspaces || []).find(w => w.toLowerCase().includes(q))
                     || (c.userWorkspaces || []).find(w => w.toLowerCase().includes(q))
                     || (c.rawWorkspaces || []).find(w => w.toLowerCase().includes(q))
@@ -1323,7 +1416,10 @@ class ConversationManagerProvider {
             folderTotalTokens: filtered.folderTotalTokens,
             folderCumulativeTokens: filtered.folderCumulativeTokens,
             folderTotalSteps: filtered.folderTotalSteps,
-            selectedId: this._selectedId
+            selectedId: this._selectedId,
+            searchQuery: this._searchQuery,
+            searchMode: this._searchMode,
+            sortBy: this._sortBy
         });
     }
     async _sendDetail(id) {
@@ -2292,6 +2388,7 @@ class ConversationManagerProvider {
     padding: 4px 0;
   }
   .conv-item {
+    position: relative;
     margin: 2px 6px;
     padding: 7px 10px;
     border-radius: 8px;
@@ -2311,12 +2408,71 @@ class ConversationManagerProvider {
     color: var(--active-fg);
     border-color: transparent;
   }
+  .conv-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+  }
   .conv-title {
     font-weight: 500;
     font-size: 12.5px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+  .conv-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s ease;
+    flex-shrink: 0;
+  }
+  .conv-item:hover .conv-item-actions,
+  .conv-item .conv-item-actions.has-starred {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .conv-item:not(:hover) .conv-item-actions.has-starred .conv-action-btn:not(.star-btn) {
+    display: none;
+  }
+  .conv-action-btn {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1;
+    transition: all 0.12s ease;
+    user-select: none;
+  }
+  .conv-action-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: var(--fg);
+  }
+  .conv-action-btn.star-btn.starred {
+    color: #eab308;
+  }
+  .conv-action-btn.star-btn:hover {
+    color: #facc15;
+  }
+  .conv-action-btn.note-btn:hover {
+    color: #38bdf8;
+  }
+  .conv-item.active .conv-action-btn {
+    color: var(--active-fg);
+    opacity: 0.85;
+  }
+  .conv-item.active .conv-action-btn.star-btn.starred {
+    color: #facc15;
+    opacity: 1;
   }
   .conv-meta {
     display: flex;
@@ -2338,6 +2494,81 @@ class ConversationManagerProvider {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .conv-note-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    font-size: 11px;
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.08);
+    padding: 3px 6px;
+    border-radius: 4px;
+    margin-top: 2px;
+    border-left: 2px solid #38bdf8;
+    line-height: 1.3;
+    word-break: break-word;
+  }
+  .conv-note-row .conv-note-icon {
+    font-size: 10px;
+    opacity: 0.85;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .conv-note-row .conv-note-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .conv-item.active .conv-note-row {
+    background: rgba(0, 0, 0, 0.2);
+    color: inherit;
+    border-left-color: currentColor;
+  }
+  .conv-note-editor {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+  }
+  .conv-note-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--vscode-input-background, #1e1e1e);
+    color: var(--fg);
+    border: 1px solid var(--vscode-input-border, #3c3c3c);
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-size: 11px;
+    outline: none;
+  }
+  .conv-note-input:focus {
+    border-color: var(--vscode-focusBorder, #007acc);
+  }
+  .conv-note-btn {
+    border: none;
+    border-radius: 4px;
+    padding: 3px 7px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .conv-note-btn.save {
+    background: var(--vscode-button-background, #0e639c);
+    color: var(--vscode-button-foreground, #ffffff);
+  }
+  .conv-note-btn.save:hover {
+    background: var(--vscode-button-hoverBackground, #1177bb);
+  }
+  .conv-note-btn.cancel {
+    background: transparent;
+    color: var(--muted);
+  }
+  .conv-note-btn.cancel:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--fg);
   }
   mark {
     background: var(--match-bg);
@@ -2827,6 +3058,8 @@ class ConversationManagerProvider {
           <div class="chip" id="chipTitle" data-mode="title">Title</div>
           <div class="chip" id="chipContent" data-mode="content">Content</div>
           <div class="chip" id="chipPath" data-mode="path">Path</div>
+          <div class="chip" id="chipStarred" data-mode="starred" title="Filter starred">★ Starred</div>
+          <div class="chip" id="chipNotes" data-mode="notes" title="Filter with notes">✎ Notes</div>
           <select id="sortSelect" class="sort-select" title="Sort conversations">
             <option value="recent">Recent</option>
             <option value="oldest">Oldest</option>
@@ -2919,6 +3152,7 @@ class ConversationManagerProvider {
     expandedFolders: new Set()
   };
 
+  let editingNoteId = null;
   let searchDebounce = null;
 
   const searchInput = document.getElementById('searchInput');
@@ -2965,6 +3199,15 @@ class ConversationManagerProvider {
     const backdrop = document.getElementById('contextBackdrop');
 
     menu.innerHTML = 
+      '<div class="context-menu-item" data-action="toggleStar" data-id="' + escapeHtml(c.id) + '">' +
+        '<span style="font-size:14px;width:14px;text-align:center;line-height:1;color:' + (c.isStarred ? '#f1c40f' : 'inherit') + ';">' + (c.isStarred ? '★' : '☆') + '</span>' +
+        '<span>' + (c.isStarred ? 'Unstar' : 'Star') + '</span>' +
+      '</div>' +
+      '<div class="context-menu-item" data-action="editNote" data-id="' + escapeHtml(c.id) + '">' +
+        '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M12.854.146a.5.5 0 0 0-.707 0L10.5 1.793 14.207 5.5l1.647-1.646a.5.5 0 0 0 0-.708l-3-3zm.646 6.061L9.793 2.5 3.293 9H3.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.207l6.5-6.5zm-7.468 7.468A.5.5 0 0 1 6 13.5V13h-.5a.5.5 0 0 1-.5-.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.5-.5V10h-.5a.499.499 0 0 1-.175-.032l-.179.178a.5.5 0 0 0-.11.168l-2 5a.5.5 0 0 0 .65.65l5-2a.5.5 0 0 0 .168-.11l.178-.178z"/></svg>' +
+        '<span>' + (c.notes ? 'Edit Note...' : 'Add Note...') + '</span>' +
+      '</div>' +
+      '<div class="context-menu-separator"></div>' +
       '<div class="context-menu-item" data-action="move" data-id="' + escapeHtml(c.id) + '">' +
         '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10l-.5-.5zm-.5 10H2V3h4.29l.86.85.35.15H14v9z"/></svg>' +
         '<span>Move to Folder...</span>' +
@@ -2996,7 +3239,7 @@ class ConversationManagerProvider {
       '</div>';
 
     const menuWidth = 185;
-    const menuHeight = 195;
+    const menuHeight = 250;
     const posX = (x + menuWidth > window.innerWidth) ? Math.max(10, window.innerWidth - menuWidth - 10) : x;
     const posY = (y + menuHeight > window.innerHeight) ? Math.max(10, window.innerHeight - menuHeight - 10) : y;
 
@@ -3019,7 +3262,12 @@ class ConversationManagerProvider {
     const action = item.getAttribute('data-action');
     const id = item.getAttribute('data-id');
     hideContextMenu();
-    if (action === 'move' && id) {
+    if (action === 'toggleStar' && id) {
+      vscode.postMessage({ type: 'toggleStar', id });
+    } else if (action === 'editNote' && id) {
+      editingNoteId = id;
+      renderConversationList();
+    } else if (action === 'move' && id) {
       vscode.postMessage({ type: 'moveConversation', id });
     } else if (action === 'openInChat' && id) {
       vscode.postMessage({ type: 'openInChat', id });
@@ -3045,10 +3293,81 @@ class ConversationManagerProvider {
 
   // Event delegation for Conversation List
   document.getElementById('convList').addEventListener('click', ev => {
+    const actionBtn = ev.target.closest('[data-action]');
+    if (actionBtn) {
+      ev.stopPropagation();
+      const action = actionBtn.getAttribute('data-action');
+      const id = actionBtn.getAttribute('data-id');
+      if (action === 'toggleStar' && id) {
+        vscode.postMessage({ type: 'toggleStar', id });
+        return;
+      }
+      if (action === 'editNote' && id) {
+        editingNoteId = id;
+        renderConversationList();
+        return;
+      }
+      if (action === 'saveNote' && id) {
+        if (typeof window.saveNoteAction === 'function') {
+          window.saveNoteAction(id);
+        }
+        return;
+      }
+      if (action === 'cancelNote') {
+        if (typeof window.cancelNoteAction === 'function') {
+          window.cancelNoteAction();
+        }
+        return;
+      }
+    }
+
+    if (ev.target.closest('.conv-note-editor')) {
+      ev.stopPropagation();
+      return;
+    }
+
     const item = ev.target.closest('.conv-item[data-id]');
     if (item) {
       const id = item.getAttribute('data-id');
       if (id) selectConversation(id);
+    }
+  });
+
+  window.saveNoteAction = function(id) {
+    const inp = document.getElementById('noteInput_' + id);
+    const notes = inp ? inp.value.trim() : '';
+    if (state.conversations) {
+      const c1 = state.conversations.find(x => x.id === id);
+      if (c1) c1.notes = notes;
+    }
+    if (state.filtered) {
+      const c2 = state.filtered.find(x => x.id === id);
+      if (c2) c2.notes = notes;
+    }
+    editingNoteId = null;
+    renderConversationList();
+    vscode.postMessage({ type: 'updateNotes', id, notes });
+  };
+
+  window.cancelNoteAction = function() {
+    editingNoteId = null;
+    renderConversationList();
+  };
+
+  document.getElementById('convList').addEventListener('keydown', ev => {
+    if (ev.target.classList.contains('conv-note-input')) {
+      const id = ev.target.id.replace('noteInput_', '');
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        if (typeof window.saveNoteAction === 'function') {
+          window.saveNoteAction(id);
+        }
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        if (typeof window.cancelNoteAction === 'function') {
+          window.cancelNoteAction();
+        }
+      }
     }
   });
 
@@ -3148,6 +3467,7 @@ class ConversationManagerProvider {
         break;
       case 'state':
         state = { ...state, ...msg };
+        updateFilterChipsUI();
         renderFolderOverview();
         renderConversationList();
         const hb = document.getElementById('headerTotalBadge'); if (hb) hb.innerText = String(msg.totalConversations || 0);
@@ -3158,6 +3478,7 @@ class ConversationManagerProvider {
         break;
       case 'conversationList':
         state = { ...state, ...msg };
+        updateFilterChipsUI();
         renderFolderOverview();
         renderConversationList();
         if (state.detail) renderDetailPane();
@@ -3168,6 +3489,13 @@ class ConversationManagerProvider {
         break;
     }
   });
+
+  function updateFilterChipsUI() {
+    const curMode = state.searchMode || 'all';
+    document.querySelectorAll('.filter-chips .chip').forEach(c => {
+      c.classList.toggle('active', c.getAttribute('data-mode') === curMode);
+    });
+  }
 
   vscode.postMessage({ type: 'ready' });
 
@@ -3212,19 +3540,29 @@ class ConversationManagerProvider {
     if (!text) return '';
     const q = (query || '').trim();
     if (!q) return escapeHtml(text);
-    const lowerText = text.toLowerCase();
-    const lowerQ = q.toLowerCase();
-    let result = '';
-    let lastIdx = 0;
-    let idx = lowerText.indexOf(lowerQ);
-    while (idx !== -1) {
-      result += escapeHtml(text.slice(lastIdx, idx));
-      result += '<mark>' + escapeHtml(text.slice(idx, idx + q.length)) + '</mark>';
-      lastIdx = idx + q.length;
-      idx = lowerText.indexOf(lowerQ, lastIdx);
+    try {
+      const normText = String(text).normalize('NFC');
+      const normQ = String(q).normalize('NFC');
+      const lowerText = normText.toLowerCase();
+      const lowerQ = normQ.toLowerCase();
+      if (!lowerQ) return escapeHtml(normText);
+      let result = '';
+      let lastIdx = 0;
+      let idx = lowerText.indexOf(lowerQ);
+      let guard = 0;
+      while (idx !== -1 && guard < 5000) {
+        guard++;
+        result += escapeHtml(normText.slice(lastIdx, idx));
+        result += '<mark>' + escapeHtml(normText.slice(idx, idx + lowerQ.length)) + '</mark>';
+        lastIdx = idx + lowerQ.length;
+        if (lastIdx <= idx) lastIdx = idx + 1;
+        idx = lowerText.indexOf(lowerQ, lastIdx);
+      }
+      result += escapeHtml(normText.slice(lastIdx));
+      return result;
+    } catch (_) {
+      return escapeHtml(text);
     }
-    result += escapeHtml(text.slice(lastIdx));
-    return result;
   }
 
   function renderFolderOverview() {
@@ -3328,6 +3666,7 @@ class ConversationManagerProvider {
     let html = '';
     for (const c of state.conversations) {
       const isSel = c.id === state.selectedId;
+      const isStarred = Boolean(c.isStarred);
       const isStandalone = !c.workspaces || c.workspaces.length === 0 || c.workspaces[0] === 'Standalone' || c.workspaces[0] === '(No Workspace)';
       const wsName = isStandalone ? 'Standalone' : (c.workspaces[0].split('/').pop() || c.workspaces[0]);
       const wsOrphaned = !isStandalone && Boolean(c.isOrphaned);
@@ -3346,20 +3685,61 @@ class ConversationManagerProvider {
         sourceBadge = '<span class="source-tag ide" title="Antigravity IDE (~/.gemini/antigravity-ide)">IDE</span>';
       }
 
+      const starIcon = isStarred ? '★' : '☆';
+      const starTitle = isStarred ? 'Unstar' : 'Star';
+      const starClass = isStarred ? 'starred' : '';
+      const actionsClass = isStarred ? 'has-starred' : '';
+
+      let actionsHtml = 
+        '<div class="conv-item-actions ' + actionsClass + '">' +
+          '<button class="conv-action-btn star-btn ' + starClass + '" data-action="toggleStar" data-id="' + escapeHtml(c.id) + '" title="' + starTitle + '">' + starIcon + '</button>' +
+          '<button class="conv-action-btn note-btn" data-action="editNote" data-id="' + escapeHtml(c.id) + '" title="' + (c.notes ? 'Edit note' : 'Add note') + '">✎</button>' +
+        '</div>';
+
+      const isEditingNote = editingNoteId === c.id;
+      let noteHtml = '';
+      if (isEditingNote) {
+        noteHtml = 
+          '<div class="conv-note-editor">' +
+            '<input type="text" class="conv-note-input" id="noteInput_' + escapeHtml(c.id) + '" value="' + escapeHtml(c.notes || '') + '" placeholder="Add note..." onclick="event.stopPropagation();">' +
+            '<button class="conv-note-btn save" data-action="saveNote" data-id="' + escapeHtml(c.id) + '" onclick="event.stopPropagation();if(typeof window.saveNoteAction===\'function\')window.saveNoteAction(\'' + escapeHtml(c.id) + '\');">Save</button>' +
+            '<button class="conv-note-btn cancel" data-action="cancelNote" data-id="' + escapeHtml(c.id) + '" onclick="event.stopPropagation();if(typeof window.cancelNoteAction===\'function\')window.cancelNoteAction();">Cancel</button>' +
+          '</div>';
+      } else if (c.notes && c.notes.trim()) {
+        const noteHighlighted = highlightMatches(c.notes, state.searchQuery);
+        noteHtml = 
+          '<div class="conv-note-row" title="Note: ' + escapeHtml(c.notes) + '">' +
+            '<span class="conv-note-icon">✎</span>' +
+            '<span class="conv-note-text">' + noteHighlighted + '</span>' +
+          '</div>';
+      }
+
       html += '<div class="conv-item ' + (isSel ? 'active' : '') + '" data-id="' + escapeHtml(c.id) + '">' +
-        '<div class="conv-title" title="' + escapeHtml(c.title) + '">' + titleHighlighted + '</div>' +
+        '<div class="conv-header-row">' +
+          '<div class="conv-title" title="' + escapeHtml(c.title) + '">' + titleHighlighted + '</div>' +
+          actionsHtml +
+        '</div>' +
         '<div class="conv-meta">' +
-        '<span class="conv-folder-badge">' + sourceBadge + wsDisplay + '</span>' +
-        '<span>&middot;</span>' +
-        '<span>' + totalMsgs + ' messages (' + (c.userMsgs || 0) + '/' + (c.modelMsgs || 0) + ')</span>' +
-        '<span>&middot;</span>' +
-        '<span>' + (state.sortBy === 'traffic' ? ('~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + ' traffic') : ('~' + formatNumber(c.estTotalTokens) + ' tokens')) + '</span>' +
-        '<span style="margin-left:auto;flex-shrink:0;">' + escapeHtml(timeStr) + '</span>' +
+          '<span class="conv-folder-badge">' + sourceBadge + wsDisplay + '</span>' +
+          '<span>&middot;</span>' +
+          '<span>' + totalMsgs + ' messages (' + (c.userMsgs || 0) + '/' + (c.modelMsgs || 0) + ')</span>' +
+          '<span>&middot;</span>' +
+          '<span>' + (state.sortBy === 'traffic' ? ('~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + ' traffic') : ('~' + formatNumber(c.estTotalTokens) + ' tokens')) + '</span>' +
+          '<span style="margin-left:auto;flex-shrink:0;">' + escapeHtml(timeStr) + '</span>' +
         '</div>' +
         (snippetHighlighted ? '<div class="conv-snippet">' + snippetHighlighted + '</div>' : '') +
+        noteHtml +
         '</div>';
     }
     container.innerHTML = html;
+
+    if (editingNoteId) {
+      const inp = document.getElementById('noteInput_' + editingNoteId);
+      if (inp) {
+        inp.focus();
+        inp.select();
+      }
+    }
   }
 
   function renderDetailPane() {
@@ -3629,6 +4009,7 @@ class ConversationManagerProvider {
 
     const matches = [];
     const searchTarget = findState.matchCase ? q : q.toLowerCase();
+    if (!searchTarget) return;
 
     for (const node of textNodes) {
       const text = node.textContent || '';
@@ -3640,7 +4021,9 @@ class ConversationManagerProvider {
       if (!parent) continue;
 
       let remainingNode = node;
-      while (index !== -1) {
+      let guard = 0;
+      while (index !== -1 && guard < 5000) {
+        guard++;
         const matchNode = remainingNode.splitText(index);
         remainingNode = matchNode.splitText(q.length);
 
@@ -3762,3 +4145,4 @@ class ConversationManagerProvider {
 exports.ConversationManagerProvider = ConversationManagerProvider;
 ConversationManagerProvider.CACHE_VERSION = 8;
 ConversationManagerProvider.CACHE_FILE = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'enhancer_conversations_cache.json');
+ConversationManagerProvider.USER_METADATA_FILE = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'enhancer_user_metadata.json');
