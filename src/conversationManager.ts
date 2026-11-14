@@ -3743,14 +3743,10 @@ export class ConversationManagerProvider {
       const snippetRaw = c.matchSnippet || c.firstMessageSnippet;
       const snippetHighlighted = snippetRaw ? highlightMatches(snippetRaw, state.searchQuery) : '';
       const totalMsgs = (c.userMsgs || 0) + (c.modelMsgs || 0);
-      let sourceBadge = '';
-      if (c.source === 'app') {
-        sourceBadge = '<span class="source-tag app" title="Standalone App (~/.gemini/antigravity)">App</span>';
-      } else if (c.source === 'both') {
-        sourceBadge = '<span class="source-tag both" title="Synced in both IDE and Standalone App">Both</span>';
-      } else {
-        sourceBadge = '<span class="source-tag ide" title="Antigravity IDE (~/.gemini/antigravity-ide)">IDE</span>';
-      }
+      const sourceName = c.source === 'app' ? 'App' : (c.source === 'both' ? 'Both' : 'IDE');
+      const sourceTitle = c.source === 'app' ? 'Standalone App (~/.gemini/antigravity)' : (c.source === 'both' ? 'Synced in both IDE and Standalone App' : 'Antigravity IDE (~/.gemini/antigravity-ide)');
+      const sourceHtml = '<span style="font-weight:600;" title="' + sourceTitle + '">' + sourceName + '</span>';
+      const wsHtml = '<span style="font-weight:600;">' + wsDisplay + '</span>';
 
       const starIcon = isStarred ? '★' : '☆';
       const starTitle = isStarred ? 'Unstar' : 'Star';
@@ -3787,7 +3783,9 @@ export class ConversationManagerProvider {
           actionsHtml +
         '</div>' +
         '<div class="conv-meta">' +
-          '<span class="conv-folder-badge">' + sourceBadge + wsDisplay + '</span>' +
+          sourceHtml +
+          '<span>&middot;</span>' +
+          wsHtml +
           '<span>&middot;</span>' +
           '<span>' + totalMsgs + ' messages (' + (c.userMsgs || 0) + '/' + (c.modelMsgs || 0) + ')</span>' +
           '<span>&middot;</span>' +
