@@ -3068,34 +3068,7 @@ export class ConversationManagerProvider {
     color: #ffffff;
     box-shadow: 0 0 0 2px #ff9800;
   }
-  .source-tag {
-    display: inline-block;
-    padding: 0px 4px;
-    font-size: 9px;
-    font-weight: 700;
-    line-height: 14px;
-    border-radius: 3px;
-    margin-right: 4px;
-    letter-spacing: 0.3px;
-    vertical-align: middle;
-    text-transform: uppercase;
-    flex-shrink: 0;
-  }
-  .source-tag.ide {
-    background: rgba(59, 130, 246, 0.18);
-    color: #60a5fa;
-    border: 1px solid rgba(96, 165, 250, 0.35);
-  }
-  .source-tag.app {
-    background: rgba(245, 158, 11, 0.18);
-    color: #fbbf24;
-    border: 1px solid rgba(251, 191, 36, 0.35);
-  }
-  .source-tag.both {
-    background: rgba(16, 185, 129, 0.18);
-    color: #34d399;
-    border: 1px solid rgba(52, 211, 153, 0.35);
-  }
+
   .conv-folder-badge {
     display: inline-flex;
     align-items: center;
@@ -3917,7 +3890,7 @@ export class ConversationManagerProvider {
         '</div>' +
 
         '<div class="metadata-bar">' +
-          '<div class="m3-chip"><b>Source:</b> ' + (c.source === 'app' ? '<span class="source-tag app">App</span> <span>Standalone (~/.gemini/antigravity)</span>' : (c.source === 'both' ? '<span class="source-tag both">Both</span> <span>Synced (IDE &amp; App)</span>' : '<span class="source-tag ide">IDE</span> <span>Antigravity IDE (~/.gemini/antigravity-ide)</span>')) + '</div>' +
+          '<div class="m3-chip"><b>Source:</b> <b>' + (c.source === 'app' ? 'App' : (c.source === 'both' ? 'Both' : 'IDE')) + '</b> <span>' + (c.source === 'app' ? '(Standalone)' : (c.source === 'both' ? '(Synced IDE &amp; App)' : '(Antigravity IDE)')) + '</span></div>' +
           '<div class="m3-chip"><b>ID:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="copy" data-copy="' + escapeHtml(c.id) + '" title="Click to copy full ID">' + escapeHtml(c.id) + '</span></div>' +
           '<div class="m3-chip"><b>Workspace:</b> <span class="meta-link" data-action="copy" data-copy="' + escapeHtml(wsStr) + '" title="' + wsFullTitle + ' (click to copy)">' + wsDisplay + '</span></div>' +
           '<div class="m3-chip"><b>Steps:</b> <span>' + c.stepCount + ' (' + (c.hasTranscript ? 'Transcript' : 'DB') + ')</span></div>' +
