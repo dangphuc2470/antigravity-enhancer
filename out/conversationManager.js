@@ -92,6 +92,10 @@ class ConversationManagerProvider {
         ConversationManagerProvider.currentPanel = panel;
         ConversationManagerProvider.currentInstance = new ConversationManagerProvider(panel, extensionUri, initialFolder);
     }
+    static revive(panel, extensionUri) {
+        ConversationManagerProvider.currentPanel = panel;
+        ConversationManagerProvider.currentInstance = new ConversationManagerProvider(panel, extensionUri);
+    }
     constructor(panel, extensionUri, initialFolder) {
         this._disposables = [];
         this._conversations = [];

@@ -70,7 +70,18 @@ export class ConversationExplorerViewProvider implements vscode.WebviewViewProvi
             localResourceRoots: [this.extensionUri]
         };
 
+        this.loadInitialData();
+
         webviewView.webview.html = this._getHtmlForWebview();
+
+        webviewView.onDidChangeVisibility(() => {
+            if (webviewView.visible) {
+                this._sendState();
+            }
+        });
+
+        setTimeout(() => this._sendState(), 100);
+        setTimeout(() => this._sendState(), 400);
 
         webviewView.webview.onDidReceiveMessage(async message => {
             switch (message.type) {
@@ -252,6 +263,9 @@ export class ConversationExplorerViewProvider implements vscode.WebviewViewProvi
 
     private _sendState() {
         if (!this._view) return;
+        if (!this._conversations || this._conversations.length === 0) {
+            this.loadInitialData();
+        }
         const treeData = ConversationManagerProvider.buildFolderTree(this._conversations, this._includeSubfolders);
         this._view.webview.postMessage({
             type: 'state',
@@ -693,12 +707,20 @@ export class ConversationExplorerViewProvider implements vscode.WebviewViewProvi
       const msg = event.data;
       if (msg.type === 'state') {
         state = { ...state, ...msg };
+        if (state.currentWorkspace) {
+          expandToFolder(state.currentWorkspace);
+        }
         if (state.selectedFolder && state.selectedFolder !== 'ALL') {
           expandToFolder(state.selectedFolder);
         }
         if (state.expandedFolders.size === 0 && Array.isArray(state.tree)) {
           for (const r of state.tree) {
             state.expandedFolders.add(r.fullPath);
+            if (Array.isArray(r.children)) {
+              for (const c of r.children) {
+                state.expandedFolders.add(c.fullPath);
+              }
+            }
           }
         }
         document.getElementById('chkSubfolders').checked = Boolean(state.includeSubfolders);
@@ -822,7 +844,13 @@ export class ConversationExplorerViewProvider implements vscode.WebviewViewProvi
       }
     });
 
+    renderFolderTree();
     vscode.postMessage({ type: 'ready' });
+    setTimeout(() => {
+      if (!state.tree || state.tree.length === 0) {
+        vscode.postMessage({ type: 'ready' });
+      }
+    }, 350);
   </script>
 </body>
 </html>`;

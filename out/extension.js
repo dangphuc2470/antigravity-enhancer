@@ -870,6 +870,17 @@ function activate(context) {
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(conversationTreeProvider_1.ConversationExplorerViewProvider.viewType, explorerProvider, {
         webviewOptions: { retainContextWhenHidden: true }
     }));
+    if (vscode.window.registerWebviewPanelSerializer) {
+        vscode.window.registerWebviewPanelSerializer('antigravityConversationManager', {
+            async deserializeWebviewPanel(webviewPanel, _state) {
+                webviewPanel.webview.options = {
+                    enableScripts: true,
+                    localResourceRoots: [context.extensionUri]
+                };
+                conversationManager_1.ConversationManagerProvider.revive(webviewPanel, context.extensionUri);
+            }
+        });
+    }
     context.subscriptions.push(vscode.commands.registerCommand('antigravity-enhancer.apply', () => applyFix(false)), vscode.commands.registerCommand('antigravity-enhancer.remove', () => removeFix()), vscode.commands.registerCommand('antigravity-enhancer.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('agi-chat-fix.apply', () => applyFix(false)), vscode.commands.registerCommand('agi-chat-fix.remove', () => removeFix()), vscode.commands.registerCommand('agi-chat-fix.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('antigravity-clipboard-fix.apply', () => applyFix(false)), vscode.commands.registerCommand('antigravity-clipboard-fix.remove', () => removeFix()), vscode.commands.registerCommand('antigravity-clipboard-fix.fixChecksums', () => fixChecksumsOnly()), vscode.commands.registerCommand('antigravity.openConversationManager', async (folder) => {
         try {
             await vscode.commands.executeCommand('antigravity.conversationExplorer.focus');

@@ -133,6 +133,11 @@ export class ConversationManagerProvider {
         ConversationManagerProvider.currentInstance = new ConversationManagerProvider(panel, extensionUri, initialFolder);
     }
 
+    public static revive(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
+        ConversationManagerProvider.currentPanel = panel;
+        ConversationManagerProvider.currentInstance = new ConversationManagerProvider(panel, extensionUri);
+    }
+
     private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, initialFolder?: string) {
         this._panel = panel;
         this._extensionUri = extensionUri;

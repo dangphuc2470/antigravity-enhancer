@@ -851,6 +851,18 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    if (vscode.window.registerWebviewPanelSerializer) {
+        vscode.window.registerWebviewPanelSerializer('antigravityConversationManager', {
+            async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel, _state: any) {
+                webviewPanel.webview.options = {
+                    enableScripts: true,
+                    localResourceRoots: [context.extensionUri]
+                };
+                ConversationManagerProvider.revive(webviewPanel, context.extensionUri);
+            }
+        });
+    }
+
     context.subscriptions.push(
         vscode.commands.registerCommand('antigravity-enhancer.apply', () => applyFix(false)),
         vscode.commands.registerCommand('antigravity-enhancer.remove', () => removeFix()),
