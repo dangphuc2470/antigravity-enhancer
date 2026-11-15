@@ -161,7 +161,15 @@ export class ConversationManagerProvider {
             }
         } catch (_) {}
 
+        const initialCached = ConversationManagerProvider.readDiskCache();
+        if (initialCached && initialCached.length > 0) {
+            this._conversations = initialCached;
+        }
+
         this._updateHtml();
+
+        setTimeout(() => this._sendState(), 100);
+        setTimeout(() => this._sendState(), 400);
 
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
@@ -169,6 +177,9 @@ export class ConversationManagerProvider {
             async message => {
                 switch (message.type) {
                     case 'ready':
+                        this._sendState();
+                        await this._loadConversations();
+                        break;
                     case 'refresh':
                         await this._loadConversations();
                         break;
@@ -801,7 +812,10 @@ export class ConversationManagerProvider {
 
             // Live bridge lookup for summaries and workspaces
             try {
-                const liveSummaries = await vscode.commands.executeCommand<any>('workbench.action.getCascadeSummaries');
+                const liveSummaries = await Promise.race([
+                    vscode.commands.executeCommand<any>('workbench.action.getCascadeSummaries'),
+                    new Promise<any>(resolve => setTimeout(() => resolve(null), 1000))
+                ]);
                 if (liveSummaries && typeof liveSummaries === 'object') {
                     for (const [k, v] of Object.entries(liveSummaries)) {
                         summariesMap.set(k, v);
@@ -3743,8 +3757,8 @@ export class ConversationManagerProvider {
         noteHtml = 
           '<div class="conv-note-editor">' +
             '<input type="text" class="conv-note-input" id="noteInput_' + escapeHtml(c.id) + '" value="' + escapeHtml(c.notes || '') + '" placeholder="Add note..." onclick="event.stopPropagation();">' +
-            '<button class="conv-note-btn save" data-action="saveNote" data-id="' + escapeHtml(c.id) + '" onclick="event.stopPropagation();if(typeof window.saveNoteAction===\'function\')window.saveNoteAction(\'' + escapeHtml(c.id) + '\');">Save</button>' +
-            '<button class="conv-note-btn cancel" data-action="cancelNote" data-id="' + escapeHtml(c.id) + '" onclick="event.stopPropagation();if(typeof window.cancelNoteAction===\'function\')window.cancelNoteAction();">Cancel</button>' +
+            '<button class="conv-note-btn save" data-action="saveNote" data-id="' + escapeHtml(c.id) + '">Save</button>' +
+            '<button class="conv-note-btn cancel" data-action="cancelNote" data-id="' + escapeHtml(c.id) + '">Cancel</button>' +
           '</div>';
       } else if (c.notes && c.notes.trim()) {
         const noteHighlighted = highlightMatches(c.notes, state.searchQuery);

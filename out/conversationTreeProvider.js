@@ -680,10 +680,10 @@ class ConversationExplorerViewProvider {
 
     function expandToFolder(targetPath) {
       if (!targetPath || targetPath === 'ALL' || targetPath === 'CURRENT') return;
-      const normTarget = targetPath.toLowerCase().replace(/\\/g, '/');
+      const normTarget = targetPath.toLowerCase().split('\\\\').join('/');
       function checkNode(node) {
         if (!node || !node.fullPath) return;
-        const nodePath = node.fullPath.toLowerCase().replace(/\\/g, '/');
+        const nodePath = node.fullPath.toLowerCase().split('\\\\').join('/');
         if (normTarget === nodePath || normTarget.startsWith(nodePath.endsWith('/') ? nodePath : nodePath + '/')) {
           state.expandedFolders.add(node.fullPath);
           if (Array.isArray(node.children)) {
