@@ -2846,6 +2846,8 @@ export class ConversationManagerProvider {
     background: var(--bg);
     overflow: hidden;
     min-width: 0;
+    container-type: inline-size;
+    container-name: paneDetail;
   }
   .detail-header {
     padding: 0 20px;
@@ -2875,6 +2877,53 @@ export class ConversationManagerProvider {
     align-items: center;
     gap: 8px;
     flex-shrink: 0;
+  }
+  .detail-more-wrapper {
+    position: relative;
+    display: none;
+  }
+  .detail-more-btn {
+    padding: 5px 9px;
+    border-radius: 9999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .detail-more-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 10000;
+    background: var(--vscode-menu-background, #252526);
+    color: var(--vscode-menu-foreground, #cccccc);
+    border: 1px solid var(--vscode-menu-border, #454545);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: 4px 0;
+    min-width: 170px;
+    font-size: 12px;
+    user-select: none;
+  }
+  .detail-actions .detail-btn-desktop {
+    display: inline-flex;
+  }
+
+  @container paneDetail (max-width: 620px) {
+    .detail-actions .detail-btn-desktop {
+      display: none !important;
+    }
+    .detail-more-wrapper {
+      display: inline-block !important;
+    }
+  }
+
+  .pane-detail.compact-actions .detail-actions .detail-btn-desktop {
+    display: none !important;
+  }
+  .pane-detail.compact-actions .detail-more-wrapper {
+    display: inline-block !important;
   }
   .btn-primary {
     background: #3b82f6;
@@ -3292,8 +3341,8 @@ export class ConversationManagerProvider {
           <div class="chip" id="chipTitle" data-mode="title">Title</div>
           <div class="chip" id="chipContent" data-mode="content">Content</div>
           <div class="chip" id="chipPath" data-mode="path">Path</div>
-          <div class="chip" id="chipStarred" data-mode="starred" title="Filter starred">★ Starred</div>
-          <div class="chip" id="chipNotes" data-mode="notes" title="Filter with notes">✎ Notes</div>
+          <div class="chip" id="chipStarred" data-mode="starred" title="Filter starred">Starred</div>
+          <div class="chip" id="chipNotes" data-mode="notes" title="Filter with notes">Notes</div>
           <select id="sortSelect" class="sort-select" title="Sort conversations">
             <option value="recent">Recent</option>
             <option value="oldest">Oldest</option>
@@ -3627,7 +3676,18 @@ export class ConversationManagerProvider {
     if (!btn) return;
     const action = btn.getAttribute('data-action');
     const id = btn.getAttribute('data-id');
-    if (action === 'openInChat' && id) {
+
+    const moreMenu = document.getElementById('detailMoreMenu');
+    if (action !== 'toggleDetailMore' && moreMenu) {
+      moreMenu.style.display = 'none';
+    }
+
+    if (action === 'toggleDetailMore') {
+      ev.stopPropagation();
+      if (moreMenu) {
+        moreMenu.style.display = moreMenu.style.display === 'none' ? 'block' : 'none';
+      }
+    } else if (action === 'openInChat' && id) {
       vscode.postMessage({ type: 'openInChat', id });
     } else if (action === 'openTranscriptLog' && id) {
       vscode.postMessage({ type: 'openTranscriptLog', id });
@@ -3732,6 +3792,27 @@ export class ConversationManagerProvider {
   }
 
   vscode.postMessage({ type: 'ready' });
+
+  const paneDetailEl = document.getElementById('paneDetail');
+  if (typeof ResizeObserver !== 'undefined' && paneDetailEl) {
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        if (entry.contentRect.width > 0 && entry.contentRect.width <= 620) {
+          paneDetailEl.classList.add('compact-actions');
+        } else {
+          paneDetailEl.classList.remove('compact-actions');
+        }
+      }
+    });
+    ro.observe(paneDetailEl);
+  }
+
+  document.addEventListener('click', ev => {
+    if (!ev.target.closest('#detailMoreWrapper')) {
+      const m = document.getElementById('detailMoreMenu');
+      if (m) m.style.display = 'none';
+    }
+  });
 
   function formatTime(ts) {
     if (!ts) return '';
@@ -4052,9 +4133,26 @@ export class ConversationManagerProvider {
           '<button class="btn-secondary" data-action="toggleDetailCollapse" title="' + (isDetailCollapsed ? 'Expand conversation stats & metadata' : 'Collapse conversation stats & metadata') + '" style="padding:2px 6px;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;flex-shrink:0;">' + detailChevron + '</button>' +
           '<div class="detail-title" title="' + escapeHtml(c.title) + '">' + escapeHtml(c.title) + '</div>' +
         '</div>' +
-        '<div class="detail-actions">' +
-          '<button class="btn-primary" data-action="openInChat" data-id="' + escapeHtml(c.id) + '">Open in Chat</button>' +
-          '<button class="btn-secondary" data-action="openFind" title="Find in conversation (Ctrl+F)">Find</button>' +
+        '<div class="detail-actions" id="detailActions">' +
+          '<button class="btn-primary detail-btn-desktop" data-action="openInChat" data-id="' + escapeHtml(c.id) + '">Open in Chat</button>' +
+          '<button class="btn-secondary detail-btn-desktop" data-action="openFind" title="Find in conversation (Ctrl+F)">Find</button>' +
+          '<div class="detail-more-wrapper" id="detailMoreWrapper">' +
+            '<button class="btn-secondary detail-more-btn" data-action="toggleDetailMore" title="More actions">' +
+              '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">' +
+                '<circle cx="3" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="13" cy="8" r="1.5"/>' +
+              '</svg>' +
+            '</button>' +
+            '<div class="detail-more-menu" id="detailMoreMenu" style="display:none;">' +
+              '<div class="context-menu-item" data-action="openInChat" data-id="' + escapeHtml(c.id) + '">' +
+                '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;"><path d="M2 1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h9.586a1 1 0 0 1 .707.293l2.853 2.853a.5.5 0 0 0 .854-.353V2a1 1 0 0 0-1-1H2z"/></svg>' +
+                '<span>Open in Chat</span>' +
+              '</div>' +
+              '<div class="context-menu-item" data-action="openFind">' +
+                '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;"><path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/></svg>' +
+                '<span>Find in Conversation</span>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
           '<button class="btn-secondary" data-action="toggleDetailSort" title="Switch message order (' + (isNewestFirst ? 'Newest first' : 'Oldest first') + ')">' + sortIcon + (isNewestFirst ? 'Newest First' : 'Oldest First') + '</button>' +
         '</div>' +
       '</div>' +
