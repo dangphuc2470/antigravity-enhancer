@@ -2,7 +2,7 @@
   "name": "antigravity-enhancer",
   "displayName": "Antigravity Enhancer",
   "description": "Essential UX enhancements and native workflow patches for Google Antigravity IDE: instant clipboard paste, seamless cross-workspace switching, conversation forking, workspace chat tabs, auto-submit permission prompts, and notification focus.",
-  "version": "1.6.2",
+  "version": "1.7.0",
   "publisher": "dangphuc2470",
   "author": {
     "name": "dangphuc2470",
@@ -110,6 +110,23 @@
         "category": "Antigravity Enhancer",
         "title": "Sync Conversations (IDE <-> App)",
         "icon": "$(sync)"
+      },
+      {
+        "command": "antigravity.syncMissingConversations",
+        "category": "Antigravity Enhancer",
+        "title": "Bù hội thoại bị rớt (Sync Missing)",
+        "icon": "$(history)"
+      },
+      {
+        "command": "antigravity.rebuildConversations",
+        "category": "Antigravity Enhancer",
+        "title": "Khôi phục toàn bộ lịch sử (Rebuild Index)",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "antigravity-enhancer.createSnapshot",
+        "category": "Antigravity Enhancer",
+        "title": "Sao lưu chỉ mục (Snapshot Now)"
       }
     ],
     "viewsContainers": {
@@ -165,6 +182,23 @@
         {
           "command": "antigravity-enhancer.openExternal",
           "group": "navigation@100"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "antigravity.syncMissingConversations",
+          "when": "view == antigravity.conversationExplorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "antigravity.rebuildConversations",
+          "when": "view == antigravity.conversationExplorer",
+          "group": "navigation@2"
+        },
+        {
+          "command": "antigravity.refreshConversationTree",
+          "when": "view == antigravity.conversationExplorer",
+          "group": "navigation@3"
         }
       ]
     },

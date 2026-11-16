@@ -44,6 +44,7 @@ const externalOpener_1 = require("./externalOpener");
 const conversationManager_1 = require("./conversationManager");
 const conversationTreeProvider_1 = require("./conversationTreeProvider");
 const trafficReportPanel_1 = require("./trafficReportPanel");
+const conversationAutoRecovery_1 = require("./conversationAutoRecovery");
 // Unique marker embedded in the patched code
 const PATCH_MARKER = '/* agy-chat-fixed */';
 const LEGACY_MARKER = '/* agy-clipboard-fixed */';
@@ -863,7 +864,31 @@ function activate(context) {
         await ConversationBackupService.importConversations();
     }), vscode.commands.registerCommand('antigravity.syncConversations', async () => {
         await conversationManager_1.ConversationManagerProvider.syncConversations();
+    }), vscode.commands.registerCommand('antigravity.syncMissingConversations', async () => {
+        await (0, conversationAutoRecovery_1.syncMissingConversations)(context);
+    }), vscode.commands.registerCommand('antigravity-enhancer.syncMissingConversations', async () => {
+        await (0, conversationAutoRecovery_1.syncMissingConversations)(context);
+    }), vscode.commands.registerCommand('antigravity.rebuildConversations', async () => {
+        await (0, conversationAutoRecovery_1.rebuildAllConversations)(context);
+    }), vscode.commands.registerCommand('antigravity-enhancer.rebuildConversations', async () => {
+        await (0, conversationAutoRecovery_1.rebuildAllConversations)(context);
+    }), vscode.commands.registerCommand('antigravity-enhancer.createSnapshot', async () => {
+        try {
+            const res = await (0, conversationAutoRecovery_1.runRecoveryHelper)(context.extensionPath, 'snapshot');
+            if (res.success) {
+                vscode.window.showInformationMessage(`Đã lưu bản sao lưu chỉ mục (${res.count} cuộc trò chuyện)!`);
+            }
+            else {
+                vscode.window.showErrorMessage(`Lỗi: ${res.error || res.reason || 'Thất bại'}`);
+            }
+        }
+        catch (err) {
+            vscode.window.showErrorMessage(`Lỗi: ${err?.message || err}`);
+        }
     }));
+    // Auto-recovery & Periodic Snapshot for conversation history
+    (0, conversationAutoRecovery_1.startPeriodicSnapshot)(context);
+    (0, conversationAutoRecovery_1.checkAndAutoRecoverConversations)(context);
     // Register external file opener for binaries, office, media, archives
     (0, externalOpener_1.registerExternalOpener)(context);
     // Auto-load pending cascade on window activation or focus
