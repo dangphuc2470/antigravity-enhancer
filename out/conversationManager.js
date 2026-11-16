@@ -293,12 +293,21 @@ class ConversationManagerProvider {
     }
     static normalizePath(uriOrPath) {
         try {
-            let s = decodeURIComponent(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
+            let s = decodeURIComponent(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/');
             if (/^file:\/\/\/[a-zA-Z]:/i.test(s)) {
                 s = s.slice(8);
             }
+            else if (s.startsWith('file:///')) {
+                s = s.slice(7);
+            }
             else if (s.startsWith('file://')) {
                 s = s.slice(7);
+            }
+            else if (s.startsWith('/file:/')) {
+                s = s.slice(6);
+            }
+            else if (s.startsWith('file:/')) {
+                s = s.slice(5);
             }
             s = s.replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
             if (/^[a-zA-Z]:/.test(s)) {
@@ -312,7 +321,23 @@ class ConversationManagerProvider {
             return s;
         }
         catch {
-            let s = String(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
+            let s = String(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/');
+            if (/^file:\/\/\/[a-zA-Z]:/i.test(s)) {
+                s = s.slice(8);
+            }
+            else if (s.startsWith('file:///')) {
+                s = s.slice(7);
+            }
+            else if (s.startsWith('file://')) {
+                s = s.slice(7);
+            }
+            else if (s.startsWith('/file:/')) {
+                s = s.slice(6);
+            }
+            else if (s.startsWith('file:/')) {
+                s = s.slice(5);
+            }
+            s = s.replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
             if (/^[a-zA-Z]:/.test(s)) {
                 s = s.charAt(0).toUpperCase() + s.slice(1);
             }
@@ -379,6 +404,116 @@ class ConversationManagerProvider {
         if (inApp)
             return 'app';
         return 'ide';
+    }
+    static async extractDbMetadata(extensionUri, pathsToScan) {
+        const result = {};
+        try {
+            const possibleScriptPaths = [];
+            if (extensionUri) {
+                possibleScriptPaths.push(path.join(extensionUri.fsPath, 'scripts', 'extract_conversation_metadata.py'));
+            }
+            possibleScriptPaths.push(path.join(__dirname, '..', 'scripts', 'extract_conversation_metadata.py'));
+            possibleScriptPaths.push(path.join(__dirname, 'scripts', 'extract_conversation_metadata.py'));
+            possibleScriptPaths.push(path.join(os.homedir(), '.antigravity-ide', 'extensions', 'dangphuc2470.antigravity-enhancer-1.6.2', 'scripts', 'extract_conversation_metadata.py'));
+            let scriptPath = '';
+            for (const sp of possibleScriptPaths) {
+                if (fs.existsSync(sp)) {
+                    scriptPath = sp;
+                    break;
+                }
+            }
+            if (!scriptPath) {
+                return result;
+            }
+            const validDirs = (pathsToScan || []).filter(d => fs.existsSync(d));
+            if (validDirs.length === 0)
+                return result;
+            const { execFile, execFileSync } = require('child_process');
+            if (!ConversationManagerProvider._detectedPythonBin) {
+                const candidates = process.platform === 'win32'
+                    ? ['python', 'python3']
+                    : ['python3', '/usr/bin/python3', 'python'];
+                for (const c of candidates) {
+                    try {
+                        execFileSync(c, ['--version'], { stdio: 'ignore', timeout: 1000 });
+                        ConversationManagerProvider._detectedPythonBin = c;
+                        break;
+                    }
+                    catch { }
+                }
+            }
+            const pyBin = ConversationManagerProvider._detectedPythonBin || 'python3';
+            const output = await new Promise((resolve) => {
+                execFile(pyBin, [scriptPath, ...validDirs], { maxBuffer: 30 * 1024 * 1024, timeout: 20000 }, (error, stdout) => {
+                    if (error) {
+                        resolve('');
+                    }
+                    else {
+                        resolve(stdout || '');
+                    }
+                });
+            });
+            if (output && output.trim()) {
+                const parsed = JSON.parse(output.trim());
+                if (parsed && typeof parsed === 'object') {
+                    return parsed;
+                }
+            }
+        }
+        catch (_) { }
+        return result;
+    }
+    static async preloadCache(extensionUri) {
+        try {
+            const ideBaseDir = path.join(os.homedir(), '.gemini', 'antigravity-ide');
+            const ideConvDir = path.join(ideBaseDir, 'conversations');
+            const appBaseDir = path.join(os.homedir(), '.gemini', 'antigravity');
+            const appConvDir = path.join(appBaseDir, 'conversations');
+            const dbMetaMap = await ConversationManagerProvider.extractDbMetadata(extensionUri, [ideConvDir, appConvDir]);
+            if (Object.keys(dbMetaMap).length === 0)
+                return;
+            const cached = ConversationManagerProvider.readDiskCache();
+            if (cached.length === 0)
+                return;
+            let modified = false;
+            const userMeta = ConversationManagerProvider.readUserMetadata();
+            for (const it of cached) {
+                const uMeta = userMeta[it.id];
+                if (uMeta?.userTitle) {
+                    if (it.title !== uMeta.userTitle) {
+                        it.title = uMeta.userTitle;
+                        it.userTitle = uMeta.userTitle;
+                        modified = true;
+                    }
+                }
+                else {
+                    const dbMeta = dbMetaMap[it.id];
+                    if (dbMeta?.title && dbMeta.title !== it.title) {
+                        it.title = dbMeta.title;
+                        modified = true;
+                    }
+                }
+                if (it.userWorkspaces === undefined && (it.workspaces.length === 0 || it.workspaces[0] === 'Standalone')) {
+                    const dbMeta = dbMetaMap[it.id];
+                    if (dbMeta?.workspace) {
+                        const norm = ConversationManagerProvider.normalizePath(dbMeta.workspace);
+                        it.workspaces = [norm];
+                        it.rawWorkspaces = [dbMeta.workspace];
+                        it.isOrphaned = !fs.existsSync(norm);
+                        modified = true;
+                    }
+                }
+            }
+            if (modified) {
+                ConversationManagerProvider.writeDiskCache(cached);
+                try {
+                    const { ConversationExplorerViewProvider } = require('./conversationTreeProvider');
+                    ConversationExplorerViewProvider.currentInstance?.updateData(cached);
+                }
+                catch { }
+            }
+        }
+        catch (_) { }
     }
     static async syncConversations() {
         const ideBase = path.join(os.homedir(), '.gemini', 'antigravity-ide');
@@ -727,7 +862,7 @@ class ConversationManagerProvider {
         try {
             if (fs.existsSync(ConversationManagerProvider.CACHE_FILE)) {
                 const raw = JSON.parse(fs.readFileSync(ConversationManagerProvider.CACHE_FILE, 'utf8'));
-                if (raw && !Array.isArray(raw) && (raw.version === 7 || raw.version === ConversationManagerProvider.CACHE_VERSION) && Array.isArray(raw.items)) {
+                if (raw && !Array.isArray(raw) && (raw.version === 7 || raw.version === 8 || raw.version === ConversationManagerProvider.CACHE_VERSION) && Array.isArray(raw.items)) {
                     for (const item of raw.items) {
                         if (item && item.id) {
                             if (Array.isArray(item.workspaces)) {
@@ -755,6 +890,10 @@ class ConversationManagerProvider {
                         it.isStarred = m.isStarred;
                     if (typeof m.notes === 'string')
                         it.notes = m.notes;
+                    if (typeof m.userTitle === 'string' && m.userTitle.trim()) {
+                        it.userTitle = m.userTitle.trim();
+                        it.title = m.userTitle.trim();
+                    }
                 }
             }
         }
@@ -819,6 +958,8 @@ class ConversationManagerProvider {
                 }
             }
             catch { }
+            // Extract metadata from SQLite databases (real AI titles and workspaces)
+            const dbMetaMap = await ConversationManagerProvider.extractDbMetadata(this._extensionUri, [ideConvDir, appConvDir]);
             const idSet = new Set();
             // Collect IDs from IDE
             if (fs.existsSync(ideConvDir)) {
@@ -865,12 +1006,18 @@ class ConversationManagerProvider {
                 'GENERIC',
                 'ERROR_MESSAGE'
             ]);
+            const userMeta = ConversationManagerProvider.readUserMetadata();
             for (const id of idSet) {
                 const summ = summariesMap.get(id);
-                let title = summ?.summary || id;
+                const dbMeta = dbMetaMap[id];
+                const userMetaItem = userMeta[id];
+                let title = userMetaItem?.userTitle || (summ?.summary && summ.summary !== id ? summ.summary : (dbMeta?.title || id));
                 const rawWorkspaces = (summ?.workspaces || [])
                     .map((w) => w?.workspaceFolderAbsoluteUri)
                     .filter((u) => typeof u === 'string' && u.length > 0);
+                if (rawWorkspaces.length === 0 && dbMeta?.workspace) {
+                    rawWorkspaces.push(dbMeta.workspace);
+                }
                 const workspaces = rawWorkspaces.map((u) => this._normalizePath(u));
                 let lastModified = this._tsToMs(summ?.lastModifiedTime);
                 let createdFromSumm = this._tsToMs(summ?.trajectoryMetadata?.createdAt);
@@ -923,8 +1070,13 @@ class ConversationManagerProvider {
                 const cached = cachedMap.get(id);
                 if (cached && cached.mtimeMs === mtimeMs && cached.size === fileSize) {
                     cached.source = source;
-                    if (title && title !== id)
+                    if (userMetaItem?.userTitle) {
+                        cached.userTitle = userMetaItem.userTitle;
+                        cached.title = userMetaItem.userTitle;
+                    }
+                    else if (title && title !== id) {
                         cached.title = title;
+                    }
                     if (cached.userWorkspaces !== undefined) {
                         cached.workspaces = cached.userWorkspaces;
                     }
@@ -1068,12 +1220,16 @@ class ConversationManagerProvider {
                 const finalWorkspaces = (cached?.userWorkspaces !== undefined) ? cached.userWorkspaces : workspaces;
                 const finalRawWorkspaces = (cached?.userWorkspaces !== undefined) ? (cached.rawWorkspaces || []) : rawWorkspaces;
                 const isOrphaned = finalWorkspaces.length > 0 && !fs.existsSync(finalWorkspaces[0]);
+                const finalTitle = userMetaItem?.userTitle
+                    ? userMetaItem.userTitle
+                    : ((title === id && firstMsg) ? firstMsg.slice(0, 60) : title);
                 const item = {
                     id,
-                    title: (title === id && firstMsg) ? firstMsg.slice(0, 60) : title,
+                    title: finalTitle,
                     workspaces: finalWorkspaces,
                     rawWorkspaces: finalRawWorkspaces,
                     userWorkspaces: cached?.userWorkspaces,
+                    userTitle: userMetaItem?.userTitle || cached?.userTitle,
                     isOrphaned,
                     source,
                     lastModifiedTime: lastModified || createdFromSumm || Date.now(),
@@ -1096,7 +1252,6 @@ class ConversationManagerProvider {
                 };
                 result.push(item);
             }
-            const userMeta = ConversationManagerProvider.readUserMetadata();
             for (const item of result) {
                 const m = userMeta[item.id];
                 if (m) {
@@ -1104,6 +1259,10 @@ class ConversationManagerProvider {
                         item.isStarred = m.isStarred;
                     if (typeof m.notes === 'string')
                         item.notes = m.notes;
+                    if (typeof m.userTitle === 'string' && m.userTitle.trim()) {
+                        item.userTitle = m.userTitle.trim();
+                        item.title = m.userTitle.trim();
+                    }
                 }
             }
             this._conversations = result;
@@ -1937,9 +2096,11 @@ class ConversationManagerProvider {
         const conv = this._conversations.find(c => c.id === id);
         if (conv) {
             conv.title = trimmed;
+            conv.userTitle = trimmed;
             this._writeDiskCache(this._conversations);
             this._sendState();
         }
+        ConversationManagerProvider.updateUserMetadata(id, { userTitle: trimmed });
         try {
             await vscode.commands.executeCommand('workbench.action.renameCascadeFromManager', id, trimmed);
         }
@@ -4130,6 +4291,7 @@ class ConversationManagerProvider {
     }
 }
 exports.ConversationManagerProvider = ConversationManagerProvider;
-ConversationManagerProvider.CACHE_VERSION = 8;
+ConversationManagerProvider.CACHE_VERSION = 9;
 ConversationManagerProvider.CACHE_FILE = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'enhancer_conversations_cache.json');
 ConversationManagerProvider.USER_METADATA_FILE = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'enhancer_user_metadata.json');
+ConversationManagerProvider._detectedPythonBin = null;

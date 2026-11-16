@@ -76,6 +76,7 @@ class ConversationExplorerViewProvider {
             await conversationManager_1.ConversationManagerProvider.currentInstance.reload();
         }
         else {
+            await conversationManager_1.ConversationManagerProvider.preloadCache(this.extensionUri);
             const cached = conversationManager_1.ConversationManagerProvider.readDiskCache();
             if (cached && cached.length > 0) {
                 this.updateData(cached);

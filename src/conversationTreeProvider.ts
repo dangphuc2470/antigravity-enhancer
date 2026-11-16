@@ -51,6 +51,7 @@ export class ConversationExplorerViewProvider implements vscode.WebviewViewProvi
         if (ConversationManagerProvider.currentInstance) {
             await ConversationManagerProvider.currentInstance.reload();
         } else {
+            await ConversationManagerProvider.preloadCache(this.extensionUri);
             const cached = ConversationManagerProvider.readDiskCache();
             if (cached && cached.length > 0) {
                 this.updateData(cached);

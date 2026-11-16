@@ -924,6 +924,10 @@ function activate(context) {
     }));
     // Register external file opener for binaries, office, media, archives
     (0, externalOpener_1.registerExternalOpener)(context);
+    // Background preload/enrich of conversation metadata cache
+    setTimeout(() => {
+        conversationManager_1.ConversationManagerProvider.preloadCache(context.extensionUri);
+    }, 1500);
     // Auto-load pending cascade on window activation or focus
     checkAndAutoLoadPendingCascade();
     context.subscriptions.push(vscode.window.onDidChangeWindowState(state => {

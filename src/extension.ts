@@ -923,6 +923,11 @@ export function activate(context: vscode.ExtensionContext) {
     // Register external file opener for binaries, office, media, archives
     registerExternalOpener(context);
 
+    // Background preload/enrich of conversation metadata cache
+    setTimeout(() => {
+        ConversationManagerProvider.preloadCache(context.extensionUri);
+    }, 1500);
+
     // Auto-load pending cascade on window activation or focus
     checkAndAutoLoadPendingCascade();
     context.subscriptions.push(
