@@ -114,19 +114,19 @@
       {
         "command": "antigravity.syncMissingConversations",
         "category": "Antigravity Enhancer",
-        "title": "Bù hội thoại bị rớt (Sync Missing)",
+        "title": "Sync Missing Conversations",
         "icon": "$(history)"
       },
       {
         "command": "antigravity.rebuildConversations",
         "category": "Antigravity Enhancer",
-        "title": "Khôi phục toàn bộ lịch sử (Rebuild Index)",
+        "title": "Rebuild Conversation Index",
         "icon": "$(tools)"
       },
       {
         "command": "antigravity-enhancer.createSnapshot",
         "category": "Antigravity Enhancer",
-        "title": "Sao lưu chỉ mục (Snapshot Now)"
+        "title": "Snapshot Conversation Index"
       }
     ],
     "viewsContainers": {
