@@ -192,6 +192,18 @@ const PATCHED_EXT_ACT = 'q.F.initialize(e),ce.end(),(()=>{try{const _normWs=u=>{
 // Antigravity 1.107.0 Subextension Injection (in extensions/agy/dist/extension.js)
 const ORIGINAL_AGY_ACT = 'try{l=await b.activate(E)}finally{c.commands.registerCommand=V}';
 const PATCHED_AGY_ACT = `;(()=>{try{const _m='/* agy-chat-fixed */';const _normWs=u=>{if(!u)return'';try{let s=decodeURIComponent(String(u)).toLowerCase().split('\\\\').join('/');if(s.startsWith('file://'))s=s.slice(7);while(s.startsWith('/'))s=s.slice(1);if(!/^[a-z]:/i.test(s))s='/'+s;while(s.endsWith('/'))s=s.slice(0,-1);return s}catch{return String(u).toLowerCase()}};c.commands.registerCommand('antigravity.openConversationWorkspaceQuickPick',async e=>{const t=e?.workspaceUris,n=e?.cascadeId;if(!t||0===t.length)return{openInCurrentWindow:!0};try{const _curWs=c.workspace.workspaceFolders?.[0]?.uri.toString();const _curNorm=_normWs(_curWs);const _tgtNorm=_normWs(t[0]);if(_tgtNorm&&_curNorm===_tgtNorm)return{openInCurrentWindow:!0};const __fs=typeof _fs!=='undefined'?_fs:null,__p=typeof _p!=='undefined'?_p:null,__os=typeof _os!=='undefined'?_os:null;const _winFile=__p&&__os?__p.join(__os.homedir(),'.gemini','antigravity_windows.json'):null;const _pendFile=__p&&__os?__p.join(__os.homedir(),'.gemini','antigravity_pending_cascade.json'):null;let _winData={};try{if(_winFile&&__fs&&__fs.existsSync(_winFile))_winData=JSON.parse(__fs.readFileSync(_winFile,'utf8'))||{}}catch(_){}const _tgtWin=_winData[_tgtNorm];let _isTargetOpen=!1;if(_tgtWin&&_tgtWin.pid){try{process.kill(_tgtWin.pid,0);_isTargetOpen=!0}catch(_){}}const _setPending=()=>{try{if(!_pendFile||!__fs)return;let pData={};if(__fs.existsSync(_pendFile))pData=JSON.parse(__fs.readFileSync(_pendFile,'utf8'))||{};pData[_tgtNorm]=n;__fs.writeFileSync(_pendFile,JSON.stringify(pData,null,2),'utf8')}catch(_){}};const targetUri=t[0].startsWith('file:')?c.Uri.parse(t[0]):c.Uri.file(t[0]);if(!_isTargetOpen){_setPending();await c.commands.executeCommand('vscode.openFolder',targetUri,{forceNewWindow:!0});return{openInCurrentWindow:!1}}if(_tgtWin.activeCascadeId&&_tgtWin.activeCascadeId!==n){return{openInCurrentWindow:!0}}_setPending();await c.commands.executeCommand('vscode.openFolder',targetUri,{forceNewWindow:!0});return{openInCurrentWindow:!1}}catch(err){console.error('[AGI-Fix] QuickPick error:',err);return{openInCurrentWindow:!0}}});const _sync=async()=>{try{const __fs=typeof _fs!=='undefined'?_fs:null,__p=typeof _p!=='undefined'?_p:null,__os=typeof _os!=='undefined'?_os:null;const _winFile=__p&&__os?__p.join(__os.homedir(),'.gemini','antigravity_windows.json'):null;if(!_winFile||!__fs)return;let _winData={};try{if(__fs.existsSync(_winFile))_winData=JSON.parse(__fs.readFileSync(_winFile,'utf8'))||{}}catch(_){}for(const[k,v]of Object.entries(_winData)){if(v&&v.pid){let _alive=!1;try{process.kill(v.pid,0);_alive=!0}catch(_){}_alive||delete _winData[k]}}const _curWs=c.workspace.workspaceFolders?.[0]?.uri.toString();if(_curWs){let _actC=null;try{_actC=await c.commands.executeCommand('workbench.action.getActiveCascadeId')}catch(_){}_winData[_normWs(_curWs)]={ws:_curWs,pid:process.pid,activeCascadeId:_actC||null,updatedAt:Date.now()}}__fs.writeFileSync(_winFile,JSON.stringify(_winData,null,2),'utf8')}catch(_){}};const _checkPending=()=>{try{const _curWs=c.workspace.workspaceFolders?.[0]?.uri.toString();if(!_curWs)return;const __fs=typeof _fs!=='undefined'?_fs:null,__p=typeof _p!=='undefined'?_p:null,__os=typeof _os!=='undefined'?_os:null;const _pendFile=__p&&__os?__p.join(__os.homedir(),'.gemini','antigravity_pending_cascade.json'):null;if(!_pendFile||!__fs||!__fs.existsSync(_pendFile))return;let pData=JSON.parse(__fs.readFileSync(_pendFile,'utf8'))||{};const _curNorm=_normWs(_curWs);const pId=pData[_curNorm];if(pId){delete pData[_curNorm];try{__fs.writeFileSync(_pendFile,JSON.stringify(pData,null,2),'utf8')}catch(_){};const _f=()=>c.commands.executeCommand('workbench.action.smartFocusConversation',pId);setTimeout(_f,300);setTimeout(_f,1000);setTimeout(_f,2500)}}catch(_){}};_checkPending();_sync();setInterval(_sync,2500);c.window.onDidChangeWindowState?.(ws=>{if(ws.focused){_checkPending();_sync()}})}catch(err){console.warn('[AGI-Fix] Injected hook failed:',err)}})();';[AGI-Fix] Injected hook failed:',err)}})();`;
+// Antigravity IDE 2.5.5 Localhost Expired Cert & Dedicated 9Router Proxy (:20443)
+const AG255_PROXY_URL = 'http://127.0.0.1:20443';
+const ORIGINAL_MAIN_LS_TLS = 'nodeOptions:{ca:n}';
+const PATCHED_MAIN_LS_TLS = 'nodeOptions:{ca:n,rejectUnauthorized:!1}';
+const ORIGINAL_MAIN_CLOUD_CODE_ARG = 'i.push("--cloud_code_endpoint",a)';
+const PATCHED_MAIN_CLOUD_CODE_ARG = `i.push("--cloud_code_endpoint","${AG255_PROXY_URL}")`;
+const ORIGINAL_MAIN_GET_BASE_URL = 'getBaseUrl(t){return NAl({isDevMode:Lf(),isGoogleInternal:this._productService.isGoogleInternal,isTierGCPTos:this._isTierGCPTos,isGcpTos:t?.isGcpTos,cloudCodeUrlOverride:this._configurationService.getValue("jetski.cloudCodeUrl")})}';
+const PATCHED_MAIN_GET_BASE_URL = `getBaseUrl(t){return"${AG255_PROXY_URL}"}`;
+const ORIGINAL_EXT_LS_TLS = 'nodeOptions:{ca:R}';
+const PATCHED_EXT_LS_TLS = 'nodeOptions:{ca:R,rejectUnauthorized:!1}';
+const ORIGINAL_EXT_CLOUD_CODE_ARG = '_.push("--cloud_code_endpoint",x)';
+const PATCHED_EXT_CLOUD_CODE_ARG = `_.push("--cloud_code_endpoint","${AG255_PROXY_URL}")`;
 function getWorkbenchPath(appRoot) {
     return path.join(appRoot, 'out', 'vs', 'workbench', 'workbench.desktop.main.js');
 }
@@ -593,13 +605,29 @@ async function applyFix(silent = false) {
             return false;
         }
     }
-    // Module 5: Multi-Window Notification Focus in main.js
+    // Module 5: Multi-Window Notification Focus & IDE 2.5.5 Proxy/TLS Fix in main.js
     let mainModified = false;
     if (fs.existsSync(mainPath)) {
         try {
             let mainContent = fs.readFileSync(mainPath, 'utf8');
+            let changed = false;
             if (mainContent.includes(ORIGINAL_NOTIF_PAYLOAD)) {
                 mainContent = mainContent.replace(ORIGINAL_NOTIF_PAYLOAD, PATCHED_NOTIF_PAYLOAD);
+                changed = true;
+            }
+            if (mainContent.includes(ORIGINAL_MAIN_LS_TLS)) {
+                mainContent = mainContent.replace(ORIGINAL_MAIN_LS_TLS, PATCHED_MAIN_LS_TLS);
+                changed = true;
+            }
+            if (mainContent.includes(ORIGINAL_MAIN_CLOUD_CODE_ARG)) {
+                mainContent = mainContent.replace(ORIGINAL_MAIN_CLOUD_CODE_ARG, PATCHED_MAIN_CLOUD_CODE_ARG);
+                changed = true;
+            }
+            if (mainContent.includes(ORIGINAL_MAIN_GET_BASE_URL)) {
+                mainContent = mainContent.replace(ORIGINAL_MAIN_GET_BASE_URL, PATCHED_MAIN_GET_BASE_URL);
+                changed = true;
+            }
+            if (changed) {
                 fs.writeFileSync(mainPath, mainContent, 'utf8');
                 mainModified = true;
             }
@@ -668,6 +696,15 @@ async function applyFix(silent = false) {
             // Antigravity 1.107.0 extension injection
             if (extContent.includes(ORIGINAL_AGY_ACT) && !extContent.includes('antigravity.openConversationWorkspaceQuickPick')) {
                 extContent = extContent.replace(ORIGINAL_AGY_ACT, () => `${ORIGINAL_AGY_ACT}${PATCHED_AGY_ACT}`);
+                extModified = true;
+            }
+            // IDE 2.5.5 localhost TLS & dedicated 9Router proxy endpoint
+            if (extContent.includes(ORIGINAL_EXT_LS_TLS)) {
+                extContent = extContent.replace(ORIGINAL_EXT_LS_TLS, PATCHED_EXT_LS_TLS);
+                extModified = true;
+            }
+            if (extContent.includes(ORIGINAL_EXT_CLOUD_CODE_ARG)) {
+                extContent = extContent.replace(ORIGINAL_EXT_CLOUD_CODE_ARG, PATCHED_EXT_CLOUD_CODE_ARG);
                 extModified = true;
             }
             if (extModified) {
