@@ -41,6 +41,35 @@ const os = __importStar(require("os"));
 const readline = __importStar(require("readline"));
 const crypto = __importStar(require("crypto"));
 class ConversationManagerProvider {
+    static readUserMetadata() {
+        try {
+            if (fs.existsSync(ConversationManagerProvider.USER_METADATA_FILE)) {
+                const raw = JSON.parse(fs.readFileSync(ConversationManagerProvider.USER_METADATA_FILE, 'utf8'));
+                if (raw && typeof raw === 'object')
+                    return raw;
+            }
+        }
+        catch (_) { }
+        return {};
+    }
+    static writeUserMetadata(data) {
+        try {
+            const dir = path.dirname(ConversationManagerProvider.USER_METADATA_FILE);
+            if (!fs.existsSync(dir))
+                fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(ConversationManagerProvider.USER_METADATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+        }
+        catch (_) { }
+    }
+    static updateUserMetadata(id, update) {
+        try {
+            const all = ConversationManagerProvider.readUserMetadata();
+            const existing = all[id] || {};
+            all[id] = { ...existing, ...update, updatedAt: Date.now() };
+            ConversationManagerProvider.writeUserMetadata(all);
+        }
+        catch (_) { }
+    }
     static createOrShow(extensionUri, initialFolder) {
         const column = vscode.window.activeTextEditor
             ? vscode.window.activeTextEditor.viewColumn
@@ -62,6 +91,10 @@ class ConversationManagerProvider {
         });
         ConversationManagerProvider.currentPanel = panel;
         ConversationManagerProvider.currentInstance = new ConversationManagerProvider(panel, extensionUri, initialFolder);
+    }
+    static revive(panel, extensionUri) {
+        ConversationManagerProvider.currentPanel = panel;
+        ConversationManagerProvider.currentInstance = new ConversationManagerProvider(panel, extensionUri);
     }
     constructor(panel, extensionUri, initialFolder) {
         this._disposables = [];
@@ -95,11 +128,20 @@ class ConversationManagerProvider {
             }
         }
         catch (_) { }
+        const initialCached = ConversationManagerProvider.readDiskCache();
+        if (initialCached && initialCached.length > 0) {
+            this._conversations = initialCached;
+        }
         this._updateHtml();
+        setTimeout(() => this._sendState(), 100);
+        setTimeout(() => this._sendState(), 400);
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
         this._panel.webview.onDidReceiveMessage(async (message) => {
             switch (message.type) {
                 case 'ready':
+                    this._sendState();
+                    await this._loadConversations();
+                    break;
                 case 'refresh':
                     await this._loadConversations();
                     break;
@@ -176,6 +218,16 @@ class ConversationManagerProvider {
                         await ConversationManagerProvider.syncSingleConversation(message.id);
                     }
                     break;
+                case 'toggleStar':
+                    if (typeof message.id === 'string') {
+                        await this._toggleStar(message.id);
+                    }
+                    break;
+                case 'updateNotes':
+                    if (typeof message.id === 'string') {
+                        await this._updateNotes(message.id, message.notes || '');
+                    }
+                    break;
             }
         }, null, this._disposables);
         this._loadConversations();
@@ -221,14 +273,41 @@ class ConversationManagerProvider {
         const { TrafficReportPanel } = require('./trafficReportPanel');
         TrafficReportPanel.createOrShow(this._extensionUri, this._conversations);
     }
+    async _toggleStar(id) {
+        const conv = this._conversations.find(c => c.id === id);
+        if (!conv)
+            return;
+        conv.isStarred = !conv.isStarred;
+        ConversationManagerProvider.updateUserMetadata(id, { isStarred: conv.isStarred });
+        this._writeDiskCache(this._conversations);
+        this._sendFilteredList();
+    }
+    async _updateNotes(id, notes) {
+        const conv = this._conversations.find(c => c.id === id);
+        if (!conv)
+            return;
+        conv.notes = (notes || '').trim();
+        ConversationManagerProvider.updateUserMetadata(id, { notes: conv.notes });
+        this._writeDiskCache(this._conversations);
+        this._sendFilteredList();
+    }
     static normalizePath(uriOrPath) {
         try {
-            let s = decodeURIComponent(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
+            let s = decodeURIComponent(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/');
             if (/^file:\/\/\/[a-zA-Z]:/i.test(s)) {
                 s = s.slice(8);
             }
+            else if (s.startsWith('file:///')) {
+                s = s.slice(7);
+            }
             else if (s.startsWith('file://')) {
                 s = s.slice(7);
+            }
+            else if (s.startsWith('/file:/')) {
+                s = s.slice(6);
+            }
+            else if (s.startsWith('file:/')) {
+                s = s.slice(5);
             }
             s = s.replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
             if (/^[a-zA-Z]:/.test(s)) {
@@ -242,7 +321,23 @@ class ConversationManagerProvider {
             return s;
         }
         catch {
-            let s = String(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
+            let s = String(uriOrPath || '').trim().replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/');
+            if (/^file:\/\/\/[a-zA-Z]:/i.test(s)) {
+                s = s.slice(8);
+            }
+            else if (s.startsWith('file:///')) {
+                s = s.slice(7);
+            }
+            else if (s.startsWith('file://')) {
+                s = s.slice(7);
+            }
+            else if (s.startsWith('/file:/')) {
+                s = s.slice(6);
+            }
+            else if (s.startsWith('file:/')) {
+                s = s.slice(5);
+            }
+            s = s.replace(/^["']+|["']+$/g, '').trim().replace(/\\/g, '/').replace(/\/+/g, '/');
             if (/^[a-zA-Z]:/.test(s)) {
                 s = s.charAt(0).toUpperCase() + s.slice(1);
             }
@@ -310,6 +405,337 @@ class ConversationManagerProvider {
             return 'app';
         return 'ide';
     }
+    static async extractDbMetadata(extensionUri, pathsToScan) {
+        const result = {};
+        try {
+            const possibleScriptPaths = [];
+            if (extensionUri) {
+                possibleScriptPaths.push(path.join(extensionUri.fsPath, 'scripts', 'extract_conversation_metadata.py'));
+            }
+            possibleScriptPaths.push(path.join(__dirname, '..', 'scripts', 'extract_conversation_metadata.py'));
+            possibleScriptPaths.push(path.join(__dirname, 'scripts', 'extract_conversation_metadata.py'));
+            possibleScriptPaths.push(path.join(os.homedir(), '.antigravity-ide', 'extensions', 'dangphuc2470.antigravity-enhancer-1.6.2', 'scripts', 'extract_conversation_metadata.py'));
+            let scriptPath = '';
+            for (const sp of possibleScriptPaths) {
+                if (fs.existsSync(sp)) {
+                    scriptPath = sp;
+                    break;
+                }
+            }
+            if (!scriptPath) {
+                return result;
+            }
+            const validDirs = (pathsToScan || []).filter(d => fs.existsSync(d));
+            if (validDirs.length === 0)
+                return result;
+            const { execFile, execFileSync } = require('child_process');
+            if (!ConversationManagerProvider._detectedPythonBin) {
+                const candidates = process.platform === 'win32'
+                    ? ['python', 'python3']
+                    : ['python3', '/usr/bin/python3', 'python'];
+                for (const c of candidates) {
+                    try {
+                        execFileSync(c, ['--version'], { stdio: 'ignore', timeout: 1000 });
+                        ConversationManagerProvider._detectedPythonBin = c;
+                        break;
+                    }
+                    catch { }
+                }
+            }
+            const pyBin = ConversationManagerProvider._detectedPythonBin || 'python3';
+            const output = await new Promise((resolve) => {
+                execFile(pyBin, [scriptPath, ...validDirs], { maxBuffer: 30 * 1024 * 1024, timeout: 20000 }, (error, stdout) => {
+                    if (error) {
+                        resolve('');
+                    }
+                    else {
+                        resolve(stdout || '');
+                    }
+                });
+            });
+            if (output && output.trim()) {
+                const parsed = JSON.parse(output.trim());
+                if (parsed && typeof parsed === 'object') {
+                    return parsed;
+                }
+            }
+        }
+        catch (_) { }
+        return result;
+    }
+    static async preloadCache(extensionUri) {
+        try {
+            const ideBaseDir = path.join(os.homedir(), '.gemini', 'antigravity-ide');
+            const ideConvDir = path.join(ideBaseDir, 'conversations');
+            const appBaseDir = path.join(os.homedir(), '.gemini', 'antigravity');
+            const appConvDir = path.join(appBaseDir, 'conversations');
+            const dbMetaMap = await ConversationManagerProvider.extractDbMetadata(extensionUri, [ideConvDir, appConvDir]);
+            if (Object.keys(dbMetaMap).length === 0)
+                return;
+            const cached = ConversationManagerProvider.readDiskCache();
+            if (cached.length === 0)
+                return;
+            let modified = false;
+            const userMeta = ConversationManagerProvider.readUserMetadata();
+            for (const it of cached) {
+                const uMeta = userMeta[it.id];
+                if (uMeta?.userTitle) {
+                    if (it.title !== uMeta.userTitle) {
+                        it.title = uMeta.userTitle;
+                        it.userTitle = uMeta.userTitle;
+                        modified = true;
+                    }
+                }
+                else {
+                    const dbMeta = dbMetaMap[it.id];
+                    if (dbMeta?.title && dbMeta.title !== it.title) {
+                        it.title = dbMeta.title;
+                        modified = true;
+                    }
+                }
+                if (it.userWorkspaces === undefined && (it.workspaces.length === 0 || it.workspaces[0] === 'Standalone')) {
+                    const dbMeta = dbMetaMap[it.id];
+                    if (dbMeta?.workspace) {
+                        const norm = ConversationManagerProvider.normalizePath(dbMeta.workspace);
+                        it.workspaces = [norm];
+                        it.rawWorkspaces = [dbMeta.workspace];
+                        it.isOrphaned = !fs.existsSync(norm);
+                        modified = true;
+                    }
+                }
+            }
+            if (modified) {
+                ConversationManagerProvider.writeDiskCache(cached);
+                try {
+                    const { ConversationExplorerViewProvider } = require('./conversationTreeProvider');
+                    ConversationExplorerViewProvider.currentInstance?.updateData(cached);
+                }
+                catch { }
+            }
+        }
+        catch (_) { }
+    }
+    static _buildSyncTitleMap() {
+        const map = new Map();
+        try {
+            const items = ConversationManagerProvider.currentInstance?._conversations?.length
+                ? ConversationManagerProvider.currentInstance._conversations
+                : ConversationManagerProvider.readDiskCache();
+            const userMeta = ConversationManagerProvider.readUserMetadata();
+            for (const item of items) {
+                if (!item?.id)
+                    continue;
+                const t = (userMeta[item.id]?.userTitle || item.userTitle || item.title || '').trim();
+                if (t && !t.startsWith('Conversation ')) {
+                    map.set(item.id, t);
+                }
+            }
+        }
+        catch { }
+        return map;
+    }
+    static _getConvDbStats(convDir, id) {
+        const mainDb = path.join(convDir, `${id}.db`);
+        if (!fs.existsSync(mainDb))
+            return { exists: false, totalBytes: 0, newestMtimeMs: 0 };
+        let totalBytes = 0;
+        let newestMtimeMs = 0;
+        for (const ext of ['.db', '.db-wal']) {
+            const f = path.join(convDir, `${id}${ext}`);
+            if (fs.existsSync(f)) {
+                try {
+                    const st = fs.statSync(f);
+                    totalBytes += st.size;
+                    if (st.mtimeMs > newestMtimeMs)
+                        newestMtimeMs = st.mtimeMs;
+                }
+                catch { }
+            }
+        }
+        return { exists: true, totalBytes, newestMtimeMs };
+    }
+    static _copyConvDbFiles(srcDir, dstDir, id) {
+        if (!fs.existsSync(dstDir))
+            fs.mkdirSync(dstDir, { recursive: true });
+        let copied = false;
+        for (const ext of ['.db', '.db-shm', '.db-wal']) {
+            const sf = path.join(srcDir, `${id}${ext}`);
+            const df = path.join(dstDir, `${id}${ext}`);
+            if (fs.existsSync(sf)) {
+                try {
+                    fs.copyFileSync(sf, df);
+                    copied = true;
+                }
+                catch { }
+            }
+            else if (ext !== '.db' && fs.existsSync(df)) {
+                try {
+                    fs.unlinkSync(df);
+                }
+                catch { }
+            }
+        }
+        return copied;
+    }
+    static _ensureAppAnnotationTitle(appBase, id, title) {
+        if (!title)
+            return;
+        try {
+            const annDir = path.join(appBase, 'annotations');
+            if (!fs.existsSync(annDir))
+                fs.mkdirSync(annDir, { recursive: true });
+            const annFile = path.join(annDir, `${id}.pbtxt`);
+            const escaped = title.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r?\n/g, ' ');
+            const nowSec = Math.floor(Date.now() / 1000);
+            if (!fs.existsSync(annFile)) {
+                fs.writeFileSync(annFile, `title:"${escaped}"  last_user_view_time:{seconds:${nowSec}  nanos:0}`, 'utf8');
+                return;
+            }
+            const existing = fs.readFileSync(annFile, 'utf8');
+            if (!/(?:^|\s)title\s*:/.test(existing)) {
+                fs.writeFileSync(annFile, `title:"${escaped}"  ${existing.trimStart()}`, 'utf8');
+            }
+        }
+        catch { }
+    }
+    static _batchUpdateAppSummaries(appBase, titleUpdates) {
+        if (!titleUpdates.length)
+            return;
+        const sumDb = path.join(appBase, 'conversation_summaries.db');
+        if (!fs.existsSync(sumDb))
+            return;
+        try {
+            const { execFileSync } = require('child_process');
+            const script = [
+                'import sys, json, sqlite3',
+                'db_path = sys.argv[1]',
+                'updates = json.loads(sys.stdin.read())',
+                'conn = sqlite3.connect(db_path, timeout=3.0)',
+                'cur = conn.cursor()',
+                'for cid, title in updates:',
+                '    cur.execute("UPDATE conversation_summaries SET title = ? WHERE conversation_id = ? AND (title IS NULL OR title = \'\')", (title, cid))',
+                'conn.commit()',
+                'conn.close()',
+            ].join('\n');
+            execFileSync('python3', ['-c', script, sumDb], {
+                input: JSON.stringify(titleUpdates),
+                stdio: ['pipe', 'ignore', 'ignore'],
+                timeout: 8000,
+            });
+        }
+        catch { }
+    }
+    static _syncOneConversation(id, ideBase, appBase, titleMap, summaryTitleUpdates) {
+        const ideBrain = path.join(ideBase, 'brain', id);
+        const appBrain = path.join(appBase, 'brain', id);
+        const ideConv = path.join(ideBase, 'conversations');
+        const appConv = path.join(appBase, 'conversations');
+        const hasIdeBrain = fs.existsSync(ideBrain);
+        const hasAppBrain = fs.existsSync(appBrain);
+        const ideDb = ConversationManagerProvider._getConvDbStats(ideConv, id);
+        const appDb = ConversationManagerProvider._getConvDbStats(appConv, id);
+        const title = titleMap.get(id);
+        if ((hasIdeBrain || ideDb.exists) && !hasAppBrain && !appDb.exists) {
+            if (hasIdeBrain) {
+                try {
+                    fs.cpSync(ideBrain, appBrain, { recursive: true });
+                }
+                catch { }
+            }
+            if (ideDb.exists) {
+                ConversationManagerProvider._copyConvDbFiles(ideConv, appConv, id);
+            }
+            ConversationManagerProvider._ensureAppAnnotationTitle(appBase, id, title);
+            if (title)
+                summaryTitleUpdates.push([id, title]);
+            return 'toApp';
+        }
+        if ((hasAppBrain || appDb.exists) && !hasIdeBrain && !ideDb.exists) {
+            if (hasAppBrain) {
+                try {
+                    fs.cpSync(appBrain, ideBrain, { recursive: true });
+                }
+                catch { }
+            }
+            if (appDb.exists) {
+                ConversationManagerProvider._copyConvDbFiles(appConv, ideConv, id);
+            }
+            return 'toIde';
+        }
+        let updated = false;
+        const ideLog = path.join(ideBrain, '.system_generated', 'logs', 'transcript.jsonl');
+        const appLog = path.join(appBrain, '.system_generated', 'logs', 'transcript.jsonl');
+        const ideLogFull = path.join(ideBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
+        const appLogFull = path.join(appBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
+        if (fs.existsSync(ideLog) && fs.existsSync(appLog)) {
+            try {
+                const ideSize = fs.statSync(ideLog).size;
+                const appSize = fs.statSync(appLog).size;
+                if (ideSize > appSize + 32) {
+                    fs.copyFileSync(ideLog, appLog);
+                    if (fs.existsSync(ideLogFull))
+                        fs.copyFileSync(ideLogFull, appLogFull);
+                    updated = true;
+                }
+                else if (appSize > ideSize + 32) {
+                    fs.copyFileSync(appLog, ideLog);
+                    if (fs.existsSync(appLogFull))
+                        fs.copyFileSync(appLogFull, ideLogFull);
+                    updated = true;
+                }
+            }
+            catch { }
+        }
+        else if (fs.existsSync(ideLog) && !fs.existsSync(appLog)) {
+            const logDir = path.dirname(appLog);
+            if (!fs.existsSync(logDir))
+                fs.mkdirSync(logDir, { recursive: true });
+            try {
+                fs.copyFileSync(ideLog, appLog);
+                if (fs.existsSync(ideLogFull))
+                    fs.copyFileSync(ideLogFull, appLogFull);
+                updated = true;
+            }
+            catch { }
+        }
+        else if (!fs.existsSync(ideLog) && fs.existsSync(appLog)) {
+            const logDir = path.dirname(ideLog);
+            if (!fs.existsSync(logDir))
+                fs.mkdirSync(logDir, { recursive: true });
+            try {
+                fs.copyFileSync(appLog, ideLog);
+                if (fs.existsSync(appLogFull))
+                    fs.copyFileSync(appLogFull, ideLogFull);
+                updated = true;
+            }
+            catch { }
+        }
+        if (ideDb.exists && !appDb.exists) {
+            if (ConversationManagerProvider._copyConvDbFiles(ideConv, appConv, id))
+                updated = true;
+        }
+        else if (!ideDb.exists && appDb.exists) {
+            if (ConversationManagerProvider._copyConvDbFiles(appConv, ideConv, id))
+                updated = true;
+        }
+        else if (ideDb.exists && appDb.exists) {
+            // Both exist: sync the newer/larger database (including .db-wal)
+            if (ideDb.totalBytes > appDb.totalBytes + 4096 || (ideDb.newestMtimeMs > appDb.newestMtimeMs + 5000 && ideDb.totalBytes >= appDb.totalBytes)) {
+                if (ConversationManagerProvider._copyConvDbFiles(ideConv, appConv, id))
+                    updated = true;
+            }
+            else if (appDb.totalBytes > ideDb.totalBytes + 4096 || (appDb.newestMtimeMs > ideDb.newestMtimeMs + 5000 && appDb.totalBytes >= ideDb.totalBytes)) {
+                if (ConversationManagerProvider._copyConvDbFiles(appConv, ideConv, id))
+                    updated = true;
+            }
+        }
+        if (hasAppBrain || appDb.exists || ideDb.exists) {
+            ConversationManagerProvider._ensureAppAnnotationTitle(appBase, id, title);
+            if (title)
+                summaryTitleUpdates.push([id, title]);
+        }
+        return updated ? 'updated' : 'unchanged';
+    }
     static async syncConversations() {
         const ideBase = path.join(os.homedir(), '.gemini', 'antigravity-ide');
         const appBase = path.join(os.homedir(), '.gemini', 'antigravity');
@@ -326,33 +752,25 @@ class ConversationManagerProvider {
         if (!fs.existsSync(appConv))
             fs.mkdirSync(appConv, { recursive: true });
         const allIds = new Set();
-        // Collect IDs from IDE
-        if (fs.existsSync(ideBrain)) {
-            for (const f of fs.readdirSync(ideBrain)) {
-                if (f !== 'tempmediaStorage' && !f.startsWith('.'))
-                    allIds.add(f);
+        for (const dir of [ideBrain, appBrain]) {
+            if (fs.existsSync(dir)) {
+                for (const f of fs.readdirSync(dir)) {
+                    if (f !== 'tempmediaStorage' && !f.startsWith('.'))
+                        allIds.add(f);
+                }
             }
         }
-        if (fs.existsSync(ideConv)) {
-            for (const f of fs.readdirSync(ideConv)) {
-                if (f.endsWith('.db'))
-                    allIds.add(f.replace('.db', ''));
-            }
-        }
-        // Collect IDs from App
-        if (fs.existsSync(appBrain)) {
-            for (const f of fs.readdirSync(appBrain)) {
-                if (f !== 'tempmediaStorage' && !f.startsWith('.'))
-                    allIds.add(f);
-            }
-        }
-        if (fs.existsSync(appConv)) {
-            for (const f of fs.readdirSync(appConv)) {
-                if (f.endsWith('.db'))
-                    allIds.add(f.replace('.db', ''));
+        for (const dir of [ideConv, appConv]) {
+            if (fs.existsSync(dir)) {
+                for (const f of fs.readdirSync(dir)) {
+                    if (f.endsWith('.db'))
+                        allIds.add(f.replace('.db', ''));
+                }
             }
         }
         const stats = { syncedToIde: 0, syncedToApp: 0, updated: 0 };
+        const titleMap = ConversationManagerProvider._buildSyncTitleMap();
+        const summaryTitleUpdates = [];
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
             title: 'Syncing conversations between IDE and Standalone App...',
@@ -366,139 +784,15 @@ class ConversationManagerProvider {
                     message: `Checking ${processed}/${idList.length}: ${id.slice(0, 8)}...`,
                     increment: (1 / (idList.length || 1)) * 100
                 });
-                const srcIdeBrain = path.join(ideBrain, id);
-                const srcAppBrain = path.join(appBrain, id);
-                const hasIdeBrain = fs.existsSync(srcIdeBrain);
-                const hasAppBrain = fs.existsSync(srcAppBrain);
-                const srcIdeDb = path.join(ideConv, `${id}.db`);
-                const srcAppDb = path.join(appConv, `${id}.db`);
-                const hasIdeDb = fs.existsSync(srcIdeDb);
-                const hasAppDb = fs.existsSync(srcAppDb);
-                // Case 1: In IDE only -> copy to App
-                if ((hasIdeBrain || hasIdeDb) && !hasAppBrain && !hasAppDb) {
-                    if (hasIdeBrain) {
-                        try {
-                            fs.cpSync(srcIdeBrain, srcAppBrain, { recursive: true });
-                        }
-                        catch { }
-                    }
-                    if (hasIdeDb) {
-                        for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                            const sf = path.join(ideConv, `${id}${ext}`);
-                            const df = path.join(appConv, `${id}${ext}`);
-                            if (fs.existsSync(sf)) {
-                                try {
-                                    fs.copyFileSync(sf, df);
-                                }
-                                catch { }
-                            }
-                        }
-                    }
+                const outcome = ConversationManagerProvider._syncOneConversation(id, ideBase, appBase, titleMap, summaryTitleUpdates);
+                if (outcome === 'toApp')
                     stats.syncedToApp++;
-                    continue;
-                }
-                // Case 2: In App only -> copy to IDE
-                if ((hasAppBrain || hasAppDb) && !hasIdeBrain && !hasIdeDb) {
-                    if (hasAppBrain) {
-                        try {
-                            fs.cpSync(srcAppBrain, srcIdeBrain, { recursive: true });
-                        }
-                        catch { }
-                    }
-                    if (hasAppDb) {
-                        for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                            const sf = path.join(appConv, `${id}${ext}`);
-                            const df = path.join(ideConv, `${id}${ext}`);
-                            if (fs.existsSync(sf)) {
-                                try {
-                                    fs.copyFileSync(sf, df);
-                                }
-                                catch { }
-                            }
-                        }
-                    }
+                else if (outcome === 'toIde')
                     stats.syncedToIde++;
-                    continue;
-                }
-                // Case 3: Both exist -> compare and update
-                let updated = false;
-                const ideLog = path.join(srcIdeBrain, '.system_generated', 'logs', 'transcript.jsonl');
-                const appLog = path.join(srcAppBrain, '.system_generated', 'logs', 'transcript.jsonl');
-                const ideLogFull = path.join(srcIdeBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
-                const appLogFull = path.join(srcAppBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
-                if (fs.existsSync(ideLog) && fs.existsSync(appLog)) {
-                    try {
-                        const ideSize = fs.statSync(ideLog).size;
-                        const appSize = fs.statSync(appLog).size;
-                        if (ideSize > appSize + 32) {
-                            fs.copyFileSync(ideLog, appLog);
-                            if (fs.existsSync(ideLogFull))
-                                fs.copyFileSync(ideLogFull, appLogFull);
-                            updated = true;
-                        }
-                        else if (appSize > ideSize + 32) {
-                            fs.copyFileSync(appLog, ideLog);
-                            if (fs.existsSync(appLogFull))
-                                fs.copyFileSync(appLogFull, ideLogFull);
-                            updated = true;
-                        }
-                    }
-                    catch { }
-                }
-                else if (fs.existsSync(ideLog) && !fs.existsSync(appLog)) {
-                    const logDir = path.dirname(appLog);
-                    if (!fs.existsSync(logDir))
-                        fs.mkdirSync(logDir, { recursive: true });
-                    try {
-                        fs.copyFileSync(ideLog, appLog);
-                        if (fs.existsSync(ideLogFull))
-                            fs.copyFileSync(ideLogFull, appLogFull);
-                        updated = true;
-                    }
-                    catch { }
-                }
-                else if (!fs.existsSync(ideLog) && fs.existsSync(appLog)) {
-                    const logDir = path.dirname(ideLog);
-                    if (!fs.existsSync(logDir))
-                        fs.mkdirSync(logDir, { recursive: true });
-                    try {
-                        fs.copyFileSync(appLog, ideLog);
-                        if (fs.existsSync(appLogFull))
-                            fs.copyFileSync(appLogFull, ideLogFull);
-                        updated = true;
-                    }
-                    catch { }
-                }
-                // Copy missing DB files
-                if (hasIdeDb && !hasAppDb) {
-                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                        const sf = path.join(ideConv, `${id}${ext}`);
-                        const df = path.join(appConv, `${id}${ext}`);
-                        if (fs.existsSync(sf)) {
-                            try {
-                                fs.copyFileSync(sf, df);
-                            }
-                            catch { }
-                        }
-                    }
-                    updated = true;
-                }
-                else if (!hasIdeDb && hasAppDb) {
-                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                        const sf = path.join(appConv, `${id}${ext}`);
-                        const df = path.join(ideConv, `${id}${ext}`);
-                        if (fs.existsSync(sf)) {
-                            try {
-                                fs.copyFileSync(sf, df);
-                            }
-                            catch { }
-                        }
-                    }
-                    updated = true;
-                }
-                if (updated)
+                else if (outcome === 'updated')
                     stats.updated++;
             }
+            ConversationManagerProvider._batchUpdateAppSummaries(appBase, summaryTitleUpdates);
         });
         if (ConversationManagerProvider.currentInstance) {
             await ConversationManagerProvider.currentInstance._loadConversations();
@@ -511,129 +805,16 @@ class ConversationManagerProvider {
         try {
             const ideBase = path.join(os.homedir(), '.gemini', 'antigravity-ide');
             const appBase = path.join(os.homedir(), '.gemini', 'antigravity');
-            const ideBrain = path.join(ideBase, 'brain', id);
-            const appBrain = path.join(appBase, 'brain', id);
-            const ideConvDir = path.join(ideBase, 'conversations');
-            const appConvDir = path.join(appBase, 'conversations');
-            const hasIdeBrain = fs.existsSync(ideBrain);
-            const hasAppBrain = fs.existsSync(appBrain);
-            const hasIdeDb = fs.existsSync(path.join(ideConvDir, `${id}.db`));
-            const hasAppDb = fs.existsSync(path.join(appConvDir, `${id}.db`));
-            if (!hasIdeBrain && !hasIdeDb && !hasAppBrain && !hasAppDb) {
+            const hasIde = fs.existsSync(path.join(ideBase, 'brain', id)) || fs.existsSync(path.join(ideBase, 'conversations', `${id}.db`));
+            const hasApp = fs.existsSync(path.join(appBase, 'brain', id)) || fs.existsSync(path.join(appBase, 'conversations', `${id}.db`));
+            if (!hasIde && !hasApp) {
                 vscode.window.showWarningMessage(`No conversation data found on disk for ${id}.`);
                 return false;
             }
-            // Sync from IDE to App if missing in App
-            if ((hasIdeBrain || hasIdeDb) && !hasAppBrain && !hasAppDb) {
-                if (hasIdeBrain) {
-                    if (!fs.existsSync(path.dirname(appBrain)))
-                        fs.mkdirSync(path.dirname(appBrain), { recursive: true });
-                    fs.cpSync(ideBrain, appBrain, { recursive: true });
-                }
-                if (hasIdeDb) {
-                    if (!fs.existsSync(appConvDir))
-                        fs.mkdirSync(appConvDir, { recursive: true });
-                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                        const sf = path.join(ideConvDir, `${id}${ext}`);
-                        const df = path.join(appConvDir, `${id}${ext}`);
-                        if (fs.existsSync(sf)) {
-                            try {
-                                fs.copyFileSync(sf, df);
-                            }
-                            catch { }
-                        }
-                    }
-                }
-            }
-            else if ((hasAppBrain || hasAppDb) && !hasIdeBrain && !hasIdeDb) {
-                // Sync from App to IDE if missing in IDE
-                if (hasAppBrain) {
-                    if (!fs.existsSync(path.dirname(ideBrain)))
-                        fs.mkdirSync(path.dirname(ideBrain), { recursive: true });
-                    fs.cpSync(appBrain, ideBrain, { recursive: true });
-                }
-                if (hasAppDb) {
-                    if (!fs.existsSync(ideConvDir))
-                        fs.mkdirSync(ideConvDir, { recursive: true });
-                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                        const sf = path.join(appConvDir, `${id}${ext}`);
-                        const df = path.join(ideConvDir, `${id}${ext}`);
-                        if (fs.existsSync(sf)) {
-                            try {
-                                fs.copyFileSync(sf, df);
-                            }
-                            catch { }
-                        }
-                    }
-                }
-            }
-            else {
-                // Both exist: check and update transcript
-                const ideLog = path.join(ideBrain, '.system_generated', 'logs', 'transcript.jsonl');
-                const appLog = path.join(appBrain, '.system_generated', 'logs', 'transcript.jsonl');
-                const ideLogFull = path.join(ideBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
-                const appLogFull = path.join(appBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
-                if (fs.existsSync(ideLog) && fs.existsSync(appLog)) {
-                    try {
-                        const ideSize = fs.statSync(ideLog).size;
-                        const appSize = fs.statSync(appLog).size;
-                        if (ideSize > appSize + 32) {
-                            fs.copyFileSync(ideLog, appLog);
-                            if (fs.existsSync(ideLogFull))
-                                fs.copyFileSync(ideLogFull, appLogFull);
-                        }
-                        else if (appSize > ideSize + 32) {
-                            fs.copyFileSync(appLog, ideLog);
-                            if (fs.existsSync(appLogFull))
-                                fs.copyFileSync(appLogFull, ideLogFull);
-                        }
-                    }
-                    catch { }
-                }
-                else if (fs.existsSync(ideLog) && !fs.existsSync(appLog)) {
-                    const logDir = path.dirname(appLog);
-                    if (!fs.existsSync(logDir))
-                        fs.mkdirSync(logDir, { recursive: true });
-                    fs.copyFileSync(ideLog, appLog);
-                    if (fs.existsSync(ideLogFull))
-                        fs.copyFileSync(ideLogFull, appLogFull);
-                }
-                else if (!fs.existsSync(ideLog) && fs.existsSync(appLog)) {
-                    const logDir = path.dirname(ideLog);
-                    if (!fs.existsSync(logDir))
-                        fs.mkdirSync(logDir, { recursive: true });
-                    fs.copyFileSync(appLog, ideLog);
-                    if (fs.existsSync(appLogFull))
-                        fs.copyFileSync(appLogFull, ideLogFull);
-                }
-                // Copy missing DB files
-                if (hasIdeDb && !hasAppDb) {
-                    if (!fs.existsSync(appConvDir))
-                        fs.mkdirSync(appConvDir, { recursive: true });
-                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                        const sf = path.join(ideConvDir, `${id}${ext}`);
-                        const df = path.join(appConvDir, `${id}${ext}`);
-                        if (fs.existsSync(sf))
-                            try {
-                                fs.copyFileSync(sf, df);
-                            }
-                            catch { }
-                    }
-                }
-                else if (!hasIdeDb && hasAppDb) {
-                    if (!fs.existsSync(ideConvDir))
-                        fs.mkdirSync(ideConvDir, { recursive: true });
-                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                        const sf = path.join(appConvDir, `${id}${ext}`);
-                        const df = path.join(ideConvDir, `${id}${ext}`);
-                        if (fs.existsSync(sf))
-                            try {
-                                fs.copyFileSync(sf, df);
-                            }
-                            catch { }
-                    }
-                }
-            }
+            const titleMap = ConversationManagerProvider._buildSyncTitleMap();
+            const summaryTitleUpdates = [];
+            ConversationManagerProvider._syncOneConversation(id, ideBase, appBase, titleMap, summaryTitleUpdates);
+            ConversationManagerProvider._batchUpdateAppSummaries(appBase, summaryTitleUpdates);
             // Reload conversations and refresh detail
             if (ConversationManagerProvider.currentInstance) {
                 const target = ConversationManagerProvider.currentInstance._conversations.find(c => c.id === id);
@@ -657,7 +838,7 @@ class ConversationManagerProvider {
         try {
             if (fs.existsSync(ConversationManagerProvider.CACHE_FILE)) {
                 const raw = JSON.parse(fs.readFileSync(ConversationManagerProvider.CACHE_FILE, 'utf8'));
-                if (raw && !Array.isArray(raw) && (raw.version === 7 || raw.version === ConversationManagerProvider.CACHE_VERSION) && Array.isArray(raw.items)) {
+                if (raw && !Array.isArray(raw) && (raw.version === 7 || raw.version === 8 || raw.version === ConversationManagerProvider.CACHE_VERSION) && Array.isArray(raw.items)) {
                     for (const item of raw.items) {
                         if (item && item.id) {
                             if (Array.isArray(item.workspaces)) {
@@ -670,8 +851,24 @@ class ConversationManagerProvider {
                             if (!item.source) {
                                 item.source = ConversationManagerProvider.detectConversationSource(item.id);
                             }
+                            item.isStarred = Boolean(item.isStarred);
+                            item.notes = typeof item.notes === 'string' ? item.notes : '';
                             list.push(item);
                         }
+                    }
+                }
+            }
+            const userMeta = ConversationManagerProvider.readUserMetadata();
+            for (const it of list) {
+                const m = userMeta[it.id];
+                if (m) {
+                    if (typeof m.isStarred === 'boolean')
+                        it.isStarred = m.isStarred;
+                    if (typeof m.notes === 'string')
+                        it.notes = m.notes;
+                    if (typeof m.userTitle === 'string' && m.userTitle.trim()) {
+                        it.userTitle = m.userTitle.trim();
+                        it.title = m.userTitle.trim();
                     }
                 }
             }
@@ -726,7 +923,10 @@ class ConversationManagerProvider {
             const summariesMap = new Map();
             // Live bridge lookup for summaries and workspaces
             try {
-                const liveSummaries = await vscode.commands.executeCommand('workbench.action.getCascadeSummaries');
+                const liveSummaries = await Promise.race([
+                    vscode.commands.executeCommand('workbench.action.getCascadeSummaries'),
+                    new Promise(resolve => setTimeout(() => resolve(null), 1000))
+                ]);
                 if (liveSummaries && typeof liveSummaries === 'object') {
                     for (const [k, v] of Object.entries(liveSummaries)) {
                         summariesMap.set(k, v);
@@ -734,6 +934,8 @@ class ConversationManagerProvider {
                 }
             }
             catch { }
+            // Extract metadata from SQLite databases (real AI titles and workspaces)
+            const dbMetaMap = await ConversationManagerProvider.extractDbMetadata(this._extensionUri, [ideConvDir, appConvDir]);
             const idSet = new Set();
             // Collect IDs from IDE
             if (fs.existsSync(ideConvDir)) {
@@ -780,12 +982,18 @@ class ConversationManagerProvider {
                 'GENERIC',
                 'ERROR_MESSAGE'
             ]);
+            const userMeta = ConversationManagerProvider.readUserMetadata();
             for (const id of idSet) {
                 const summ = summariesMap.get(id);
-                let title = summ?.summary || id;
+                const dbMeta = dbMetaMap[id];
+                const userMetaItem = userMeta[id];
+                let title = userMetaItem?.userTitle || (summ?.summary && summ.summary !== id ? summ.summary : (dbMeta?.title || id));
                 const rawWorkspaces = (summ?.workspaces || [])
                     .map((w) => w?.workspaceFolderAbsoluteUri)
                     .filter((u) => typeof u === 'string' && u.length > 0);
+                if (rawWorkspaces.length === 0 && dbMeta?.workspace) {
+                    rawWorkspaces.push(dbMeta.workspace);
+                }
                 const workspaces = rawWorkspaces.map((u) => this._normalizePath(u));
                 let lastModified = this._tsToMs(summ?.lastModifiedTime);
                 let createdFromSumm = this._tsToMs(summ?.trajectoryMetadata?.createdAt);
@@ -838,8 +1046,13 @@ class ConversationManagerProvider {
                 const cached = cachedMap.get(id);
                 if (cached && cached.mtimeMs === mtimeMs && cached.size === fileSize) {
                     cached.source = source;
-                    if (title && title !== id)
+                    if (userMetaItem?.userTitle) {
+                        cached.userTitle = userMetaItem.userTitle;
+                        cached.title = userMetaItem.userTitle;
+                    }
+                    else if (title && title !== id) {
                         cached.title = title;
+                    }
                     if (cached.userWorkspaces !== undefined) {
                         cached.workspaces = cached.userWorkspaces;
                     }
@@ -983,12 +1196,16 @@ class ConversationManagerProvider {
                 const finalWorkspaces = (cached?.userWorkspaces !== undefined) ? cached.userWorkspaces : workspaces;
                 const finalRawWorkspaces = (cached?.userWorkspaces !== undefined) ? (cached.rawWorkspaces || []) : rawWorkspaces;
                 const isOrphaned = finalWorkspaces.length > 0 && !fs.existsSync(finalWorkspaces[0]);
+                const finalTitle = userMetaItem?.userTitle
+                    ? userMetaItem.userTitle
+                    : ((title === id && firstMsg) ? firstMsg.slice(0, 60) : title);
                 const item = {
                     id,
-                    title: (title === id && firstMsg) ? firstMsg.slice(0, 60) : title,
+                    title: finalTitle,
                     workspaces: finalWorkspaces,
                     rawWorkspaces: finalRawWorkspaces,
                     userWorkspaces: cached?.userWorkspaces,
+                    userTitle: userMetaItem?.userTitle || cached?.userTitle,
                     isOrphaned,
                     source,
                     lastModifiedTime: lastModified || createdFromSumm || Date.now(),
@@ -1010,6 +1227,19 @@ class ConversationManagerProvider {
                     size: fileSize
                 };
                 result.push(item);
+            }
+            for (const item of result) {
+                const m = userMeta[item.id];
+                if (m) {
+                    if (typeof m.isStarred === 'boolean')
+                        item.isStarred = m.isStarred;
+                    if (typeof m.notes === 'string')
+                        item.notes = m.notes;
+                    if (typeof m.userTitle === 'string' && m.userTitle.trim()) {
+                        item.userTitle = m.userTitle.trim();
+                        item.title = m.userTitle.trim();
+                    }
+                }
             }
             this._conversations = result;
             this._writeDiskCache(result);
@@ -1203,10 +1433,16 @@ class ConversationManagerProvider {
             folderTotalSteps += c.stepCount || 0;
         }
         let list = [...folderList];
-        const q = this._searchQuery.trim().toLowerCase();
+        if (this._searchMode === 'starred') {
+            list = list.filter(c => Boolean(c.isStarred));
+        }
+        else if (this._searchMode === 'notes') {
+            list = list.filter(c => Boolean(c.notes && c.notes.trim()));
+        }
+        const q = (this._searchQuery || '').trim().normalize('NFC').toLowerCase();
         if (q) {
             list = list.filter(c => {
-                const titleMatch = c.title.toLowerCase().includes(q);
+                const titleMatch = (c.title || '').normalize('NFC').toLowerCase().includes(q);
                 if (this._searchMode === 'title')
                     return titleMatch;
                 const wsMatch = (c.workspaces || []).some(w => w.toLowerCase().includes(q))
@@ -1215,13 +1451,16 @@ class ConversationManagerProvider {
                     || (c.workspaces.length === 0 && 'standalone'.includes(q));
                 if (this._searchMode === 'path')
                     return wsMatch;
+                const noteMatch = (c.notes || '').normalize('NFC').toLowerCase().includes(q);
+                if (this._searchMode === 'notes')
+                    return noteMatch || titleMatch;
                 const snippetMatch = (c.firstMessageSnippet || '').toLowerCase().includes(q);
                 const contentMatch = (c.searchableContent || '').toLowerCase().includes(q);
                 const idMatch = c.id.toLowerCase().includes(q);
                 if (this._searchMode === 'content') {
-                    return contentMatch || snippetMatch;
+                    return contentMatch || snippetMatch || noteMatch;
                 }
-                return titleMatch || contentMatch || snippetMatch || idMatch || wsMatch;
+                return titleMatch || contentMatch || snippetMatch || idMatch || wsMatch || noteMatch;
             });
         }
         list.sort((a, b) => {
@@ -1253,7 +1492,12 @@ class ConversationManagerProvider {
                     matchSnippet = (start > 0 ? '...' : '') + c.searchableContent.slice(start, end) + (end < c.searchableContent.length ? '...' : '');
                 }
             }
-            if (this._searchMode === 'path' || (!c.searchableContent && (c.workspaces || []).some(w => w.toLowerCase().includes(q)))) {
+            if (q && c.notes && c.notes.toLowerCase().includes(q)) {
+                if (!c.searchableContent || !c.searchableContent.toLowerCase().includes(q)) {
+                    matchSnippet = 'Note: ' + c.notes;
+                }
+            }
+            if (this._searchMode === 'path' || (!c.searchableContent && !c.notes && (c.workspaces || []).some(w => w.toLowerCase().includes(q)))) {
                 const matchedWs = (c.workspaces || []).find(w => w.toLowerCase().includes(q))
                     || (c.userWorkspaces || []).find(w => w.toLowerCase().includes(q))
                     || (c.rawWorkspaces || []).find(w => w.toLowerCase().includes(q))
@@ -1323,7 +1567,10 @@ class ConversationManagerProvider {
             folderTotalTokens: filtered.folderTotalTokens,
             folderCumulativeTokens: filtered.folderCumulativeTokens,
             folderTotalSteps: filtered.folderTotalSteps,
-            selectedId: this._selectedId
+            selectedId: this._selectedId,
+            searchQuery: this._searchQuery,
+            searchMode: this._searchMode,
+            sortBy: this._sortBy
         });
     }
     async _sendDetail(id) {
@@ -1825,9 +2072,11 @@ class ConversationManagerProvider {
         const conv = this._conversations.find(c => c.id === id);
         if (conv) {
             conv.title = trimmed;
+            conv.userTitle = trimmed;
             this._writeDiskCache(this._conversations);
             this._sendState();
         }
+        ConversationManagerProvider.updateUserMetadata(id, { userTitle: trimmed });
         try {
             await vscode.commands.executeCommand('workbench.action.renameCascadeFromManager', id, trimmed);
         }
@@ -2088,19 +2337,26 @@ class ConversationManagerProvider {
 
   /* Folder Overview Panel (Material You inspired, Dark Mode VS Code) */
   .folder-overview {
-    padding: 10px 12px 10px 12px;
+    padding: 0 12px 10px 12px;
     background: var(--vscode-sideBar-background, rgba(255, 255, 255, 0.025));
     border-bottom: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
     flex-shrink: 0;
+  }
+  .folder-overview.collapsed {
+    padding-bottom: 0;
+    gap: 0;
   }
   .overview-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+    height: 51px;
+    min-height: 51px;
+    box-sizing: border-box;
   }
   .overview-title {
     display: flex;
@@ -2285,6 +2541,7 @@ class ConversationManagerProvider {
     padding: 4px 0;
   }
   .conv-item {
+    position: relative;
     margin: 2px 6px;
     padding: 7px 10px;
     border-radius: 8px;
@@ -2304,12 +2561,71 @@ class ConversationManagerProvider {
     color: var(--active-fg);
     border-color: transparent;
   }
+  .conv-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+  }
   .conv-title {
     font-weight: 500;
     font-size: 12.5px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+  .conv-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s ease;
+    flex-shrink: 0;
+  }
+  .conv-item:hover .conv-item-actions,
+  .conv-item .conv-item-actions.has-starred {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .conv-item:not(:hover) .conv-item-actions.has-starred .conv-action-btn:not(.star-btn) {
+    display: none;
+  }
+  .conv-action-btn {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1;
+    transition: all 0.12s ease;
+    user-select: none;
+  }
+  .conv-action-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: var(--fg);
+  }
+  .conv-action-btn.star-btn.starred {
+    color: #eab308;
+  }
+  .conv-action-btn.star-btn:hover {
+    color: #facc15;
+  }
+  .conv-action-btn.note-btn:hover {
+    color: #38bdf8;
+  }
+  .conv-item.active .conv-action-btn {
+    color: var(--active-fg);
+    opacity: 0.85;
+  }
+  .conv-item.active .conv-action-btn.star-btn.starred {
+    color: #facc15;
+    opacity: 1;
   }
   .conv-meta {
     display: flex;
@@ -2332,6 +2648,81 @@ class ConversationManagerProvider {
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .conv-note-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    font-size: 11px;
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.08);
+    padding: 3px 6px;
+    border-radius: 4px;
+    margin-top: 2px;
+    border-left: 2px solid #38bdf8;
+    line-height: 1.3;
+    word-break: break-word;
+  }
+  .conv-note-row .conv-note-icon {
+    font-size: 10px;
+    opacity: 0.85;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .conv-note-row .conv-note-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .conv-item.active .conv-note-row {
+    background: rgba(0, 0, 0, 0.2);
+    color: inherit;
+    border-left-color: currentColor;
+  }
+  .conv-note-editor {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+  }
+  .conv-note-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--vscode-input-background, #1e1e1e);
+    color: var(--fg);
+    border: 1px solid var(--vscode-input-border, #3c3c3c);
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-size: 11px;
+    outline: none;
+  }
+  .conv-note-input:focus {
+    border-color: var(--vscode-focusBorder, #007acc);
+  }
+  .conv-note-btn {
+    border: none;
+    border-radius: 4px;
+    padding: 3px 7px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .conv-note-btn.save {
+    background: var(--vscode-button-background, #0e639c);
+    color: var(--vscode-button-foreground, #ffffff);
+  }
+  .conv-note-btn.save:hover {
+    background: var(--vscode-button-hoverBackground, #1177bb);
+  }
+  .conv-note-btn.cancel {
+    background: transparent;
+    color: var(--muted);
+  }
+  .conv-note-btn.cancel:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--fg);
+  }
   mark {
     background: var(--match-bg);
     color: inherit;
@@ -2347,9 +2738,14 @@ class ConversationManagerProvider {
     background: var(--bg);
     overflow: hidden;
     min-width: 0;
+    container-type: inline-size;
+    container-name: paneDetail;
   }
   .detail-header {
-    padding: 12px 20px;
+    padding: 0 20px;
+    height: 52px;
+    min-height: 52px;
+    box-sizing: border-box;
     border-bottom: 1px solid var(--border);
     background: var(--vscode-sideBar-background, rgba(255, 255, 255, 0.025));
     display: flex;
@@ -2373,6 +2769,53 @@ class ConversationManagerProvider {
     align-items: center;
     gap: 8px;
     flex-shrink: 0;
+  }
+  .detail-more-wrapper {
+    position: relative;
+    display: none;
+  }
+  .detail-more-btn {
+    padding: 5px 9px;
+    border-radius: 9999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .detail-more-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 10000;
+    background: var(--vscode-menu-background, #252526);
+    color: var(--vscode-menu-foreground, #cccccc);
+    border: 1px solid var(--vscode-menu-border, #454545);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: 4px 0;
+    min-width: 170px;
+    font-size: 12px;
+    user-select: none;
+  }
+  .detail-actions .detail-btn-desktop {
+    display: inline-flex;
+  }
+
+  @container paneDetail (max-width: 620px) {
+    .detail-actions .detail-btn-desktop {
+      display: none !important;
+    }
+    .detail-more-wrapper {
+      display: inline-block !important;
+    }
+  }
+
+  .pane-detail.compact-actions .detail-actions .detail-btn-desktop {
+    display: none !important;
+  }
+  .pane-detail.compact-actions .detail-more-wrapper {
+    display: inline-block !important;
   }
   .btn-primary {
     background: #3b82f6;
@@ -2545,7 +2988,9 @@ class ConversationManagerProvider {
     border: 1px solid rgba(255, 255, 255, 0.1);
   }
   .msg-fork-btn {
-    opacity: 0.75;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 9999px;
@@ -2557,8 +3002,11 @@ class ConversationManagerProvider {
     transition: all 0.18s cubic-bezier(0.2, 0, 0, 1);
     color: var(--fg);
   }
-  .msg-bubble:hover .msg-fork-btn {
+  .msg-bubble:hover .msg-fork-btn,
+  .msg-fork-btn:focus-visible {
     opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
     border-color: rgba(255, 255, 255, 0.25);
   }
   .msg-fork-btn:hover {
@@ -2755,34 +3203,7 @@ class ConversationManagerProvider {
     color: #ffffff;
     box-shadow: 0 0 0 2px #ff9800;
   }
-  .source-tag {
-    display: inline-block;
-    padding: 0px 4px;
-    font-size: 9px;
-    font-weight: 700;
-    line-height: 14px;
-    border-radius: 3px;
-    margin-right: 4px;
-    letter-spacing: 0.3px;
-    vertical-align: middle;
-    text-transform: uppercase;
-    flex-shrink: 0;
-  }
-  .source-tag.ide {
-    background: rgba(59, 130, 246, 0.18);
-    color: #60a5fa;
-    border: 1px solid rgba(96, 165, 250, 0.35);
-  }
-  .source-tag.app {
-    background: rgba(245, 158, 11, 0.18);
-    color: #fbbf24;
-    border: 1px solid rgba(251, 191, 36, 0.35);
-  }
-  .source-tag.both {
-    background: rgba(16, 185, 129, 0.18);
-    color: #34d399;
-    border: 1px solid rgba(52, 211, 153, 0.35);
-  }
+
   .conv-folder-badge {
     display: inline-flex;
     align-items: center;
@@ -2812,6 +3233,8 @@ class ConversationManagerProvider {
           <div class="chip" id="chipTitle" data-mode="title">Title</div>
           <div class="chip" id="chipContent" data-mode="content">Content</div>
           <div class="chip" id="chipPath" data-mode="path">Path</div>
+          <div class="chip" id="chipStarred" data-mode="starred" title="Filter starred">Starred</div>
+          <div class="chip" id="chipNotes" data-mode="notes" title="Filter with notes">Notes</div>
           <select id="sortSelect" class="sort-select" title="Sort conversations">
             <option value="recent">Recent</option>
             <option value="oldest">Oldest</option>
@@ -2859,6 +3282,21 @@ class ConversationManagerProvider {
 <script>
   const vscode = acquireVsCodeApi();
 
+  let initialDetailSort = 'newest';
+  try {
+    const savedDetailSort = localStorage.getItem('cm_detail_sort_order');
+    if (savedDetailSort === 'oldest' || savedDetailSort === 'newest') {
+      initialDetailSort = savedDetailSort;
+    }
+  } catch (_) {}
+
+  let initialDetailCollapsed = false;
+  let initialOverviewCollapsed = false;
+  try {
+    initialDetailCollapsed = localStorage.getItem('cm_detail_collapsed') === 'true';
+    initialOverviewCollapsed = localStorage.getItem('cm_overview_collapsed') === 'true';
+  } catch (_) {}
+
   let state = {
     tree: [],
     conversations: [],
@@ -2881,11 +3319,15 @@ class ConversationManagerProvider {
     searchQuery: '',
     searchMode: 'all',
     sortBy: 'recent',
+    detailSortOrder: initialDetailSort,
+    detailCollapsed: initialDetailCollapsed,
+    overviewCollapsed: initialOverviewCollapsed,
     detail: null,
     matchesOnly: false,
     expandedFolders: new Set()
   };
 
+  let editingNoteId = null;
   let searchDebounce = null;
 
   const searchInput = document.getElementById('searchInput');
@@ -2932,6 +3374,15 @@ class ConversationManagerProvider {
     const backdrop = document.getElementById('contextBackdrop');
 
     menu.innerHTML = 
+      '<div class="context-menu-item" data-action="toggleStar" data-id="' + escapeHtml(c.id) + '">' +
+        '<span style="font-size:14px;width:14px;text-align:center;line-height:1;color:' + (c.isStarred ? '#f1c40f' : 'inherit') + ';">' + (c.isStarred ? '★' : '☆') + '</span>' +
+        '<span>' + (c.isStarred ? 'Unstar' : 'Star') + '</span>' +
+      '</div>' +
+      '<div class="context-menu-item" data-action="editNote" data-id="' + escapeHtml(c.id) + '">' +
+        '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M12.854.146a.5.5 0 0 0-.707 0L10.5 1.793 14.207 5.5l1.647-1.646a.5.5 0 0 0 0-.708l-3-3zm.646 6.061L9.793 2.5 3.293 9H3.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.207l6.5-6.5zm-7.468 7.468A.5.5 0 0 1 6 13.5V13h-.5a.5.5 0 0 1-.5-.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.5-.5V10h-.5a.499.499 0 0 1-.175-.032l-.179.178a.5.5 0 0 0-.11.168l-2 5a.5.5 0 0 0 .65.65l5-2a.5.5 0 0 0 .168-.11l.178-.178z"/></svg>' +
+        '<span>' + (c.notes ? 'Edit Note...' : 'Add Note...') + '</span>' +
+      '</div>' +
+      '<div class="context-menu-separator"></div>' +
       '<div class="context-menu-item" data-action="move" data-id="' + escapeHtml(c.id) + '">' +
         '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10l-.5-.5zm-.5 10H2V3h4.29l.86.85.35.15H14v9z"/></svg>' +
         '<span>Move to Folder...</span>' +
@@ -2963,7 +3414,7 @@ class ConversationManagerProvider {
       '</div>';
 
     const menuWidth = 185;
-    const menuHeight = 195;
+    const menuHeight = 250;
     const posX = (x + menuWidth > window.innerWidth) ? Math.max(10, window.innerWidth - menuWidth - 10) : x;
     const posY = (y + menuHeight > window.innerHeight) ? Math.max(10, window.innerHeight - menuHeight - 10) : y;
 
@@ -2986,7 +3437,12 @@ class ConversationManagerProvider {
     const action = item.getAttribute('data-action');
     const id = item.getAttribute('data-id');
     hideContextMenu();
-    if (action === 'move' && id) {
+    if (action === 'toggleStar' && id) {
+      vscode.postMessage({ type: 'toggleStar', id });
+    } else if (action === 'editNote' && id) {
+      editingNoteId = id;
+      renderConversationList();
+    } else if (action === 'move' && id) {
       vscode.postMessage({ type: 'moveConversation', id });
     } else if (action === 'openInChat' && id) {
       vscode.postMessage({ type: 'openInChat', id });
@@ -3012,10 +3468,81 @@ class ConversationManagerProvider {
 
   // Event delegation for Conversation List
   document.getElementById('convList').addEventListener('click', ev => {
+    const actionBtn = ev.target.closest('[data-action]');
+    if (actionBtn) {
+      ev.stopPropagation();
+      const action = actionBtn.getAttribute('data-action');
+      const id = actionBtn.getAttribute('data-id');
+      if (action === 'toggleStar' && id) {
+        vscode.postMessage({ type: 'toggleStar', id });
+        return;
+      }
+      if (action === 'editNote' && id) {
+        editingNoteId = id;
+        renderConversationList();
+        return;
+      }
+      if (action === 'saveNote' && id) {
+        if (typeof window.saveNoteAction === 'function') {
+          window.saveNoteAction(id);
+        }
+        return;
+      }
+      if (action === 'cancelNote') {
+        if (typeof window.cancelNoteAction === 'function') {
+          window.cancelNoteAction();
+        }
+        return;
+      }
+    }
+
+    if (ev.target.closest('.conv-note-editor')) {
+      ev.stopPropagation();
+      return;
+    }
+
     const item = ev.target.closest('.conv-item[data-id]');
     if (item) {
       const id = item.getAttribute('data-id');
       if (id) selectConversation(id);
+    }
+  });
+
+  window.saveNoteAction = function(id) {
+    const inp = document.getElementById('noteInput_' + id);
+    const notes = inp ? inp.value.trim() : '';
+    if (state.conversations) {
+      const c1 = state.conversations.find(x => x.id === id);
+      if (c1) c1.notes = notes;
+    }
+    if (state.filtered) {
+      const c2 = state.filtered.find(x => x.id === id);
+      if (c2) c2.notes = notes;
+    }
+    editingNoteId = null;
+    renderConversationList();
+    vscode.postMessage({ type: 'updateNotes', id, notes });
+  };
+
+  window.cancelNoteAction = function() {
+    editingNoteId = null;
+    renderConversationList();
+  };
+
+  document.getElementById('convList').addEventListener('keydown', ev => {
+    if (ev.target.classList.contains('conv-note-input')) {
+      const id = ev.target.id.replace('noteInput_', '');
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        if (typeof window.saveNoteAction === 'function') {
+          window.saveNoteAction(id);
+        }
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        if (typeof window.cancelNoteAction === 'function') {
+          window.cancelNoteAction();
+        }
+      }
     }
   });
 
@@ -3041,7 +3568,18 @@ class ConversationManagerProvider {
     if (!btn) return;
     const action = btn.getAttribute('data-action');
     const id = btn.getAttribute('data-id');
-    if (action === 'openInChat' && id) {
+
+    const moreMenu = document.getElementById('detailMoreMenu');
+    if (action !== 'toggleDetailMore' && moreMenu) {
+      moreMenu.style.display = 'none';
+    }
+
+    if (action === 'toggleDetailMore') {
+      ev.stopPropagation();
+      if (moreMenu) {
+        moreMenu.style.display = moreMenu.style.display === 'none' ? 'block' : 'none';
+      }
+    } else if (action === 'openInChat' && id) {
       vscode.postMessage({ type: 'openInChat', id });
     } else if (action === 'openTranscriptLog' && id) {
       vscode.postMessage({ type: 'openTranscriptLog', id });
@@ -3058,6 +3596,14 @@ class ConversationManagerProvider {
       vscode.postMessage({ type: 'openTrafficReport' });
     } else if (action === 'openFind') {
       openFindWidget();
+    } else if (action === 'toggleDetailSort') {
+      state.detailSortOrder = state.detailSortOrder === 'newest' ? 'oldest' : 'newest';
+      try { localStorage.setItem('cm_detail_sort_order', state.detailSortOrder); } catch (_) {}
+      renderDetailPane();
+    } else if (action === 'toggleDetailCollapse') {
+      state.detailCollapsed = !state.detailCollapsed;
+      try { localStorage.setItem('cm_detail_collapsed', String(state.detailCollapsed)); } catch (_) {}
+      renderDetailPane();
     } else if (action === 'copy') {
       const text = btn.getAttribute('data-copy') || '';
       vscode.postMessage({ type: 'copy', text });
@@ -3072,6 +3618,13 @@ class ConversationManagerProvider {
   });
 
   document.getElementById('folderOverview').addEventListener('click', ev => {
+    const collapseBtn = ev.target.closest('[data-action="toggleOverviewCollapse"]');
+    if (collapseBtn) {
+      state.overviewCollapsed = !state.overviewCollapsed;
+      try { localStorage.setItem('cm_overview_collapsed', String(state.overviewCollapsed)); } catch (_) {}
+      renderFolderOverview();
+      return;
+    }
     const btn = ev.target.closest('[data-action="openTrafficReport"]');
     if (btn) {
       vscode.postMessage({ type: 'openTrafficReport' });
@@ -3100,6 +3653,7 @@ class ConversationManagerProvider {
         break;
       case 'state':
         state = { ...state, ...msg };
+        updateFilterChipsUI();
         renderFolderOverview();
         renderConversationList();
         const hb = document.getElementById('headerTotalBadge'); if (hb) hb.innerText = String(msg.totalConversations || 0);
@@ -3110,6 +3664,7 @@ class ConversationManagerProvider {
         break;
       case 'conversationList':
         state = { ...state, ...msg };
+        updateFilterChipsUI();
         renderFolderOverview();
         renderConversationList();
         if (state.detail) renderDetailPane();
@@ -3121,7 +3676,35 @@ class ConversationManagerProvider {
     }
   });
 
+  function updateFilterChipsUI() {
+    const curMode = state.searchMode || 'all';
+    document.querySelectorAll('.filter-chips .chip').forEach(c => {
+      c.classList.toggle('active', c.getAttribute('data-mode') === curMode);
+    });
+  }
+
   vscode.postMessage({ type: 'ready' });
+
+  const paneDetailEl = document.getElementById('paneDetail');
+  if (typeof ResizeObserver !== 'undefined' && paneDetailEl) {
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        if (entry.contentRect.width > 0 && entry.contentRect.width <= 620) {
+          paneDetailEl.classList.add('compact-actions');
+        } else {
+          paneDetailEl.classList.remove('compact-actions');
+        }
+      }
+    });
+    ro.observe(paneDetailEl);
+  }
+
+  document.addEventListener('click', ev => {
+    if (!ev.target.closest('#detailMoreWrapper')) {
+      const m = document.getElementById('detailMoreMenu');
+      if (m) m.style.display = 'none';
+    }
+  });
 
   function formatTime(ts) {
     if (!ts) return '';
@@ -3164,19 +3747,29 @@ class ConversationManagerProvider {
     if (!text) return '';
     const q = (query || '').trim();
     if (!q) return escapeHtml(text);
-    const lowerText = text.toLowerCase();
-    const lowerQ = q.toLowerCase();
-    let result = '';
-    let lastIdx = 0;
-    let idx = lowerText.indexOf(lowerQ);
-    while (idx !== -1) {
-      result += escapeHtml(text.slice(lastIdx, idx));
-      result += '<mark>' + escapeHtml(text.slice(idx, idx + q.length)) + '</mark>';
-      lastIdx = idx + q.length;
-      idx = lowerText.indexOf(lowerQ, lastIdx);
+    try {
+      const normText = String(text).normalize('NFC');
+      const normQ = String(q).normalize('NFC');
+      const lowerText = normText.toLowerCase();
+      const lowerQ = normQ.toLowerCase();
+      if (!lowerQ) return escapeHtml(normText);
+      let result = '';
+      let lastIdx = 0;
+      let idx = lowerText.indexOf(lowerQ);
+      let guard = 0;
+      while (idx !== -1 && guard < 5000) {
+        guard++;
+        result += escapeHtml(normText.slice(lastIdx, idx));
+        result += '<mark>' + escapeHtml(normText.slice(idx, idx + lowerQ.length)) + '</mark>';
+        lastIdx = idx + lowerQ.length;
+        if (lastIdx <= idx) lastIdx = idx + 1;
+        idx = lowerText.indexOf(lowerQ, lastIdx);
+      }
+      result += escapeHtml(normText.slice(lastIdx));
+      return result;
+    } catch (_) {
+      return escapeHtml(text);
     }
-    result += escapeHtml(text.slice(lastIdx));
-    return result;
   }
 
   function renderFolderOverview() {
@@ -3219,36 +3812,45 @@ class ConversationManagerProvider {
 
     const apiTraffic = (typeof state.folderCumulativeTokens === 'number') ? state.folderCumulativeTokens : tokens;
 
+    const isOvCollapsed = Boolean(state.overviewCollapsed);
+    container.classList.toggle('collapsed', isOvCollapsed);
+    const ovChevron = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="transform:' + (isOvCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)') + ';transition:transform 0.2s ease;"><path d="M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z"/></svg>';
+
     container.innerHTML =
       '<div class="overview-header">' +
         '<div class="overview-title" title="' + escapeHtml(state.selectedFolder) + '">' +
           iconSvg +
           '<span class="overview-name">' + escapeHtml(fName) + '</span>' +
         '</div>' +
-        '<span class="overview-scope-badge">' + scopeLabel + '</span>' +
+        '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">' +
+          '<span class="overview-scope-badge">' + scopeLabel + '</span>' +
+          '<button class="btn-secondary" data-action="toggleOverviewCollapse" title="' + (isOvCollapsed ? 'Expand overview stats' : 'Collapse overview stats') + '" style="padding:2px 6px;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;">' + ovChevron + '</button>' +
+        '</div>' +
       '</div>' +
-      '<div class="overview-cards">' +
-        '<div class="m3-stat-card">' +
-          '<div class="m3-label">Conversations</div>' +
-          '<div class="m3-value">' + count + '</div>' +
-          '<div class="m3-sub" title="' + escapeHtml(convSub) + '">' + escapeHtml(convSub) + '</div>' +
-        '</div>' +
-        '<div class="m3-stat-card">' +
-          '<div class="m3-label">Messages</div>' +
-          '<div class="m3-value">' + formatNumber(msgs) + '</div>' +
-          '<div class="m3-sub" title="' + escapeHtml(msgSub) + '">' + escapeHtml(msgSub) + '</div>' +
-        '</div>' +
-        '<div class="m3-stat-card">' +
-          '<div class="m3-label">Context Memory</div>' +
-          '<div class="m3-value">~' + formatNumber(tokens) + '</div>' +
-          '<div class="m3-sub">active context</div>' +
-        '</div>' +
-        '<div class="m3-stat-card clickable" id="cardApiTraffic" data-action="openTrafficReport" title="Click to open detailed API Traffic & Token Report" style="cursor:pointer;">' +
-          '<div class="m3-label">API Traffic (Full)</div>' +
-          '<div class="m3-value">~' + formatNumber(apiTraffic) + '</div>' +
-          '<div class="m3-sub">Cumulative &middot; View Report &rarr;</div>' +
-        '</div>' +
-      '</div>';
+      (isOvCollapsed ? '' : (
+        '<div class="overview-cards">' +
+          '<div class="m3-stat-card">' +
+            '<div class="m3-label">Conversations</div>' +
+            '<div class="m3-value">' + count + '</div>' +
+            '<div class="m3-sub" title="' + escapeHtml(convSub) + '">' + escapeHtml(convSub) + '</div>' +
+          '</div>' +
+          '<div class="m3-stat-card">' +
+            '<div class="m3-label">Messages</div>' +
+            '<div class="m3-value">' + formatNumber(msgs) + '</div>' +
+            '<div class="m3-sub" title="' + escapeHtml(msgSub) + '">' + escapeHtml(msgSub) + '</div>' +
+          '</div>' +
+          '<div class="m3-stat-card">' +
+            '<div class="m3-label">Context Memory</div>' +
+            '<div class="m3-value">~' + formatNumber(tokens) + '</div>' +
+            '<div class="m3-sub">active context</div>' +
+          '</div>' +
+          '<div class="m3-stat-card clickable" id="cardApiTraffic" data-action="openTrafficReport" title="Click to open detailed API Traffic & Token Report" style="cursor:pointer;">' +
+            '<div class="m3-label">API Traffic (Full)</div>' +
+            '<div class="m3-value">~' + formatNumber(apiTraffic) + '</div>' +
+            '<div class="m3-sub">Cumulative &middot; View Report &rarr;</div>' +
+          '</div>' +
+        '</div>'
+      ));
   }
 
   function renderConversationList() {
@@ -3271,6 +3873,7 @@ class ConversationManagerProvider {
     let html = '';
     for (const c of state.conversations) {
       const isSel = c.id === state.selectedId;
+      const isStarred = Boolean(c.isStarred);
       const isStandalone = !c.workspaces || c.workspaces.length === 0 || c.workspaces[0] === 'Standalone' || c.workspaces[0] === '(No Workspace)';
       const wsName = isStandalone ? 'Standalone' : (c.workspaces[0].split('/').pop() || c.workspaces[0]);
       const wsOrphaned = !isStandalone && Boolean(c.isOrphaned);
@@ -3280,29 +3883,68 @@ class ConversationManagerProvider {
       const snippetRaw = c.matchSnippet || c.firstMessageSnippet;
       const snippetHighlighted = snippetRaw ? highlightMatches(snippetRaw, state.searchQuery) : '';
       const totalMsgs = (c.userMsgs || 0) + (c.modelMsgs || 0);
-      let sourceBadge = '';
-      if (c.source === 'app') {
-        sourceBadge = '<span class="source-tag app" title="Standalone App (~/.gemini/antigravity)">App</span>';
-      } else if (c.source === 'both') {
-        sourceBadge = '<span class="source-tag both" title="Synced in both IDE and Standalone App">Both</span>';
-      } else {
-        sourceBadge = '<span class="source-tag ide" title="Antigravity IDE (~/.gemini/antigravity-ide)">IDE</span>';
+      const sourceName = c.source === 'app' ? 'App' : (c.source === 'both' ? 'Both' : 'IDE');
+      const sourceTitle = c.source === 'app' ? 'Standalone App (~/.gemini/antigravity)' : (c.source === 'both' ? 'Synced in both IDE and Standalone App' : 'Antigravity IDE (~/.gemini/antigravity-ide)');
+      const sourceHtml = '<span style="font-weight:600;" title="' + sourceTitle + '">' + sourceName + '</span>';
+      const wsHtml = '<span style="font-weight:600;">' + wsDisplay + '</span>';
+
+      const starIcon = isStarred ? '★' : '☆';
+      const starTitle = isStarred ? 'Unstar' : 'Star';
+      const starClass = isStarred ? 'starred' : '';
+      const actionsClass = isStarred ? 'has-starred' : '';
+
+      let actionsHtml = 
+        '<div class="conv-item-actions ' + actionsClass + '">' +
+          '<button class="conv-action-btn star-btn ' + starClass + '" data-action="toggleStar" data-id="' + escapeHtml(c.id) + '" title="' + starTitle + '">' + starIcon + '</button>' +
+          '<button class="conv-action-btn note-btn" data-action="editNote" data-id="' + escapeHtml(c.id) + '" title="' + (c.notes ? 'Edit note' : 'Add note') + '">✎</button>' +
+        '</div>';
+
+      const isEditingNote = editingNoteId === c.id;
+      let noteHtml = '';
+      if (isEditingNote) {
+        noteHtml = 
+          '<div class="conv-note-editor">' +
+            '<input type="text" class="conv-note-input" id="noteInput_' + escapeHtml(c.id) + '" value="' + escapeHtml(c.notes || '') + '" placeholder="Add note..." onclick="event.stopPropagation();">' +
+            '<button class="conv-note-btn save" data-action="saveNote" data-id="' + escapeHtml(c.id) + '">Save</button>' +
+            '<button class="conv-note-btn cancel" data-action="cancelNote" data-id="' + escapeHtml(c.id) + '">Cancel</button>' +
+          '</div>';
+      } else if (c.notes && c.notes.trim()) {
+        const noteHighlighted = highlightMatches(c.notes, state.searchQuery);
+        noteHtml = 
+          '<div class="conv-note-row" title="Note: ' + escapeHtml(c.notes) + '">' +
+            '<span class="conv-note-icon">✎</span>' +
+            '<span class="conv-note-text">' + noteHighlighted + '</span>' +
+          '</div>';
       }
 
       html += '<div class="conv-item ' + (isSel ? 'active' : '') + '" data-id="' + escapeHtml(c.id) + '">' +
-        '<div class="conv-title" title="' + escapeHtml(c.title) + '">' + titleHighlighted + '</div>' +
+        '<div class="conv-header-row">' +
+          '<div class="conv-title" title="' + escapeHtml(c.title) + '">' + titleHighlighted + '</div>' +
+          actionsHtml +
+        '</div>' +
         '<div class="conv-meta">' +
-        '<span class="conv-folder-badge">' + sourceBadge + wsDisplay + '</span>' +
-        '<span>&middot;</span>' +
-        '<span>' + totalMsgs + ' messages (' + (c.userMsgs || 0) + '/' + (c.modelMsgs || 0) + ')</span>' +
-        '<span>&middot;</span>' +
-        '<span>' + (state.sortBy === 'traffic' ? ('~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + ' traffic') : ('~' + formatNumber(c.estTotalTokens) + ' tokens')) + '</span>' +
-        '<span style="margin-left:auto;flex-shrink:0;">' + escapeHtml(timeStr) + '</span>' +
+          sourceHtml +
+          '<span>&middot;</span>' +
+          wsHtml +
+          '<span>&middot;</span>' +
+          '<span>' + totalMsgs + ' messages (' + (c.userMsgs || 0) + '/' + (c.modelMsgs || 0) + ')</span>' +
+          '<span>&middot;</span>' +
+          '<span>' + (state.sortBy === 'traffic' ? ('~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + ' traffic') : ('~' + formatNumber(c.estTotalTokens) + ' tokens')) + '</span>' +
+          '<span style="margin-left:auto;flex-shrink:0;">' + escapeHtml(timeStr) + '</span>' +
         '</div>' +
         (snippetHighlighted ? '<div class="conv-snippet">' + snippetHighlighted + '</div>' : '') +
+        noteHtml +
         '</div>';
     }
     container.innerHTML = html;
+
+    if (editingNoteId) {
+      const inp = document.getElementById('noteInput_' + editingNoteId);
+      if (inp) {
+        inp.focus();
+        inp.select();
+      }
+    }
   }
 
   function renderDetailPane() {
@@ -3339,6 +3981,10 @@ class ConversationManagerProvider {
       msgEntries.push({ m, thinkMatch });
     }
 
+    if (state.detailSortOrder === 'newest') {
+      msgEntries.reverse();
+    }
+
     let messagesHtml = '';
     for (const entry of msgEntries) {
       const m = entry.m;
@@ -3365,50 +4011,78 @@ class ConversationManagerProvider {
 
     const totalMsgs = (c.userMsgs || 0) + (c.modelMsgs || 0);
     const thinkingNote = c.estThinkingTokens ? (' (' + formatNumber(c.estThinkingTokens) + ' think)') : '';
+    const isNewestFirst = state.detailSortOrder === 'newest';
+    const sortIcon = isNewestFirst
+      ? '<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-1px;margin-right:4px;"><path d="M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z"/></svg>'
+      : '<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-1px;margin-right:4px;"><path d="m7.247 4.86-4.796 5.481c-.566.647-.106 1.659.753 1.659h9.592a1 1 0 0 0 .753-1.659l-4.796-5.48a1 1 0 0 0-1.506 0z"/></svg>';
+
+    const isDetailCollapsed = Boolean(state.detailCollapsed);
+    const detailChevron = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="transform:' + (isDetailCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)') + ';transition:transform 0.2s ease;"><path d="M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z"/></svg>';
 
     container.innerHTML =
       '<div class="detail-header">' +
-        '<div class="detail-title" title="' + escapeHtml(c.title) + '">' + escapeHtml(c.title) + '</div>' +
-        '<div class="detail-actions">' +
-          '<button class="btn-primary" data-action="openInChat" data-id="' + escapeHtml(c.id) + '">Open in Chat</button>' +
-          '<button class="btn-secondary" data-action="syncSingleConversation" data-id="' + escapeHtml(c.id) + '" title="Sync this conversation between IDE and App (~/.gemini/antigravity)">Sync</button>' +
-          '<button class="btn-secondary" data-action="openFind" title="Find in conversation (Ctrl+F)">Find</button>' +
-          '<button class="btn-secondary" data-action="openTranscriptLog" data-id="' + escapeHtml(c.id) + '">View Log</button>' +
+        '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1;">' +
+          '<button class="btn-secondary" data-action="toggleDetailCollapse" title="' + (isDetailCollapsed ? 'Expand conversation stats & metadata' : 'Collapse conversation stats & metadata') + '" style="padding:2px 6px;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;flex-shrink:0;">' + detailChevron + '</button>' +
+          '<div class="detail-title" title="' + escapeHtml(c.title) + '">' + escapeHtml(c.title) + '</div>' +
+        '</div>' +
+        '<div class="detail-actions" id="detailActions">' +
+          '<button class="btn-primary detail-btn-desktop" data-action="openInChat" data-id="' + escapeHtml(c.id) + '">Open in Chat</button>' +
+          '<button class="btn-secondary detail-btn-desktop" data-action="openFind" title="Find in conversation (Ctrl+F)">Find</button>' +
+          '<div class="detail-more-wrapper" id="detailMoreWrapper">' +
+            '<button class="btn-secondary detail-more-btn" data-action="toggleDetailMore" title="More actions">' +
+              '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">' +
+                '<circle cx="3" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="13" cy="8" r="1.5"/>' +
+              '</svg>' +
+            '</button>' +
+            '<div class="detail-more-menu" id="detailMoreMenu" style="display:none;">' +
+              '<div class="context-menu-item" data-action="openInChat" data-id="' + escapeHtml(c.id) + '">' +
+                '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;"><path d="M2 1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h9.586a1 1 0 0 1 .707.293l2.853 2.853a.5.5 0 0 0 .854-.353V2a1 1 0 0 0-1-1H2z"/></svg>' +
+                '<span>Open in Chat</span>' +
+              '</div>' +
+              '<div class="context-menu-item" data-action="openFind">' +
+                '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;"><path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/></svg>' +
+                '<span>Find in Conversation</span>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+          '<button class="btn-secondary" data-action="toggleDetailSort" title="Switch message order (' + (isNewestFirst ? 'Newest first' : 'Oldest first') + ')">' + sortIcon + (isNewestFirst ? 'Newest First' : 'Oldest First') + '</button>' +
         '</div>' +
       '</div>' +
 
-      '<div class="detail-stats">' +
-        '<div class="m3-stat-card">' +
-          '<span class="m3-label">Messages</span>' +
-          '<span class="m3-value">' + totalMsgs + ' total</span>' +
-          '<span class="m3-sub">' + (c.userMsgs || 0) + ' user / ' + (c.modelMsgs || 0) + ' AI · ' + (c.toolCalls || 0) + ' tools</span>' +
+      (isDetailCollapsed ? '' : (
+        '<div class="detail-stats">' +
+          '<div class="m3-stat-card">' +
+            '<span class="m3-label">Messages</span>' +
+            '<span class="m3-value">' + totalMsgs + ' total</span>' +
+            '<span class="m3-sub">' + (c.userMsgs || 0) + ' user / ' + (c.modelMsgs || 0) + ' AI · ' + (c.toolCalls || 0) + ' tools</span>' +
+          '</div>' +
+          '<div class="m3-stat-card">' +
+            '<span class="m3-label">Context Memory</span>' +
+            '<span class="m3-value">~' + formatNumber(c.estTotalTokens) + '</span>' +
+            '<span class="m3-sub">' + formatNumber(c.estInputTokens) + ' in / ' + formatNumber(c.estOutputTokens) + ' out' + thinkingNote + '</span>' +
+          '</div>' +
+          '<div class="m3-stat-card clickable" data-action="openTrafficReport" title="Click to open detailed API Traffic & Token Report" style="cursor:pointer;">' +
+            '<span class="m3-label">API Traffic (Full)</span>' +
+            '<span class="m3-value">~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + '</span>' +
+            '<span class="m3-sub">' + (c.modelMsgs || 0) + ' reqs &middot; Cumulative &rarr;</span>' +
+          '</div>' +
+          '<div class="m3-stat-card">' +
+            '<span class="m3-label">Duration</span>' +
+            '<span class="m3-value">' + durationStr + '</span>' +
+            '<span class="m3-sub">Updated ' + formatTime(c.lastModifiedTime) + '</span>' +
+          '</div>' +
         '</div>' +
-        '<div class="m3-stat-card">' +
-          '<span class="m3-label">Context Memory</span>' +
-          '<span class="m3-value">~' + formatNumber(c.estTotalTokens) + '</span>' +
-          '<span class="m3-sub">' + formatNumber(c.estInputTokens) + ' in / ' + formatNumber(c.estOutputTokens) + ' out' + thinkingNote + '</span>' +
-        '</div>' +
-        '<div class="m3-stat-card clickable" data-action="openTrafficReport" title="Click to open detailed API Traffic & Token Report" style="cursor:pointer;">' +
-          '<span class="m3-label">API Traffic (Full)</span>' +
-          '<span class="m3-value">~' + formatNumber(c.cumulativeTokens || c.estTotalTokens) + '</span>' +
-          '<span class="m3-sub">' + (c.modelMsgs || 0) + ' reqs &middot; Cumulative &rarr;</span>' +
-        '</div>' +
-        '<div class="m3-stat-card">' +
-          '<span class="m3-label">Duration</span>' +
-          '<span class="m3-value">' + durationStr + '</span>' +
-          '<span class="m3-sub">Updated ' + formatTime(c.lastModifiedTime) + '</span>' +
-        '</div>' +
-      '</div>' +
 
-      '<div class="metadata-bar">' +
-        '<div class="m3-chip"><b>Source:</b> ' + (c.source === 'app' ? '<span class="source-tag app">App</span> <span>Standalone (~/.gemini/antigravity)</span>' : (c.source === 'both' ? '<span class="source-tag both">Both</span> <span>Synced (IDE &amp; App)</span>' : '<span class="source-tag ide">IDE</span> <span>Antigravity IDE (~/.gemini/antigravity-ide)</span>')) + '</div>' +
-        '<div class="m3-chip"><b>ID:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="copy" data-copy="' + escapeHtml(c.id) + '" title="Click to copy full ID">' + escapeHtml(c.id) + '</span></div>' +
-        '<div class="m3-chip"><b>Workspace:</b> <span class="meta-link" data-action="copy" data-copy="' + escapeHtml(wsStr) + '" title="' + wsFullTitle + ' (click to copy)">' + wsDisplay + '</span></div>' +
-        '<div class="m3-chip"><b>Steps:</b> <span>' + c.stepCount + ' (' + (c.hasTranscript ? 'Transcript' : 'DB') + ')</span></div>' +
-        '<div class="m3-chip"><b>Created:</b> <span>' + escapeHtml(createdStr) + '</span></div>' +
-        '<div class="m3-chip"><b>Modified:</b> <span>' + escapeHtml(modifiedStr) + '</span></div>' +
-        (c.parentConversationId ? ('<div class="m3-chip"><b>Forked:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="jumpConv" data-id="' + escapeHtml(c.parentConversationId) + '" title="Open parent conversation">' + escapeHtml(c.parentConversationId.slice(0, 8)) + '...</span></div>') : '') +
-      '</div>' +
+        '<div class="metadata-bar">' +
+          '<div class="m3-chip"><b>Source:</b> <b>' + (c.source === 'app' ? 'App' : (c.source === 'both' ? 'Both' : 'IDE')) + '</b> <span>' + (c.source === 'app' ? '(Standalone)' : (c.source === 'both' ? '(Synced IDE &amp; App)' : '(Antigravity IDE)')) + '</span></div>' +
+          '<div class="m3-chip"><b>ID:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="copy" data-copy="' + escapeHtml(c.id) + '" title="Click to copy full ID">' + escapeHtml(c.id) + '</span></div>' +
+          '<div class="m3-chip"><b>Workspace:</b> <span class="meta-link" data-action="copy" data-copy="' + escapeHtml(wsStr) + '" title="' + wsFullTitle + ' (click to copy)">' + wsDisplay + '</span></div>' +
+          '<div class="m3-chip"><b>Steps:</b> <span>' + c.stepCount + ' (' + (c.hasTranscript ? 'Transcript' : 'DB') + ')</span></div>' +
+          '<div class="m3-chip"><b>Created:</b> <span>' + escapeHtml(createdStr) + '</span></div>' +
+          '<div class="m3-chip"><b>Modified:</b> <span>' + escapeHtml(modifiedStr) + '</span></div>' +
+          (c.parentConversationId ? ('<div class="m3-chip"><b>Forked:</b> <span class="meta-link" style="font-family:var(--mono);" data-action="jumpConv" data-id="' + escapeHtml(c.parentConversationId) + '" title="Open parent conversation">' + escapeHtml(c.parentConversationId.slice(0, 8)) + '...</span></div>') : '') +
+        '</div>'
+      )) +
 
       (q ? (
         '<div class="detail-search-bar">' +
@@ -3557,6 +4231,7 @@ class ConversationManagerProvider {
 
     const matches = [];
     const searchTarget = findState.matchCase ? q : q.toLowerCase();
+    if (!searchTarget) return;
 
     for (const node of textNodes) {
       const text = node.textContent || '';
@@ -3568,7 +4243,9 @@ class ConversationManagerProvider {
       if (!parent) continue;
 
       let remainingNode = node;
-      while (index !== -1) {
+      let guard = 0;
+      while (index !== -1 && guard < 5000) {
+        guard++;
         const matchNode = remainingNode.splitText(index);
         remainingNode = matchNode.splitText(q.length);
 
@@ -3688,5 +4365,7 @@ class ConversationManagerProvider {
     }
 }
 exports.ConversationManagerProvider = ConversationManagerProvider;
-ConversationManagerProvider.CACHE_VERSION = 8;
+ConversationManagerProvider.CACHE_VERSION = 9;
 ConversationManagerProvider.CACHE_FILE = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'enhancer_conversations_cache.json');
+ConversationManagerProvider.USER_METADATA_FILE = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'enhancer_user_metadata.json');
+ConversationManagerProvider._detectedPythonBin = null;

@@ -76,6 +76,7 @@ class ConversationExplorerViewProvider {
             await conversationManager_1.ConversationManagerProvider.currentInstance.reload();
         }
         else {
+            await conversationManager_1.ConversationManagerProvider.preloadCache(this.extensionUri);
             const cached = conversationManager_1.ConversationManagerProvider.readDiskCache();
             if (cached && cached.length > 0) {
                 this.updateData(cached);
@@ -88,7 +89,15 @@ class ConversationExplorerViewProvider {
             enableScripts: true,
             localResourceRoots: [this.extensionUri]
         };
+        this.loadInitialData();
         webviewView.webview.html = this._getHtmlForWebview();
+        webviewView.onDidChangeVisibility(() => {
+            if (webviewView.visible) {
+                this._sendState();
+            }
+        });
+        setTimeout(() => this._sendState(), 100);
+        setTimeout(() => this._sendState(), 400);
         webviewView.webview.onDidReceiveMessage(async (message) => {
             switch (message.type) {
                 case 'ready':
@@ -253,6 +262,9 @@ class ConversationExplorerViewProvider {
     _sendState() {
         if (!this._view)
             return;
+        if (!this._conversations || this._conversations.length === 0) {
+            this.loadInitialData();
+        }
         const treeData = conversationManager_1.ConversationManagerProvider.buildFolderTree(this._conversations, this._includeSubfolders);
         this._view.webview.postMessage({
             type: 'state',
@@ -592,6 +604,9 @@ class ConversationExplorerViewProvider {
       container.innerHTML = html;
     }
 
+    let lastClickFolder = null;
+    let lastClickTime = 0;
+
     document.getElementById('folderTree').addEventListener('click', e => {
       const toggleEl = e.target.closest('[data-toggle]');
       if (toggleEl) {
@@ -610,6 +625,21 @@ class ConversationExplorerViewProvider {
       if (itemEl) {
         const folder = itemEl.getAttribute('data-folder');
         if (folder) {
+          const now = Date.now();
+          const isDblClick = (folder === lastClickFolder && (now - lastClickTime) < 400) || e.detail >= 2;
+          if (isDblClick) {
+            lastClickTime = 0;
+            lastClickFolder = null;
+            if (state.expandedFolders.has(folder)) {
+              state.expandedFolders.delete(folder);
+            } else {
+              state.expandedFolders.add(folder);
+            }
+            renderFolderTree();
+            return;
+          }
+          lastClickFolder = folder;
+          lastClickTime = now;
           state.selectedFolder = folder;
           renderFolderTree();
           vscode.postMessage({ type: 'selectFolder', folder });
@@ -649,17 +679,54 @@ class ConversationExplorerViewProvider {
       vscode.postMessage({ type: 'export' });
     });
 
+    function expandToFolder(targetPath) {
+      if (!targetPath || targetPath === 'ALL' || targetPath === 'CURRENT') return;
+      const normTarget = targetPath.toLowerCase().split('\\\\').join('/');
+      function checkNode(node) {
+        if (!node || !node.fullPath) return;
+        const nodePath = node.fullPath.toLowerCase().split('\\\\').join('/');
+        if (normTarget === nodePath || normTarget.startsWith(nodePath.endsWith('/') ? nodePath : nodePath + '/')) {
+          state.expandedFolders.add(node.fullPath);
+          if (Array.isArray(node.children)) {
+            for (const child of node.children) {
+              checkNode(child);
+            }
+          }
+        }
+      }
+      if (Array.isArray(state.tree)) {
+        for (const root of state.tree) {
+          checkNode(root);
+        }
+      }
+    }
+
     window.addEventListener('message', event => {
       const msg = event.data;
       if (msg.type === 'state') {
         state = { ...state, ...msg };
+        if (state.currentWorkspace) {
+          expandToFolder(state.currentWorkspace);
+        }
+        if (state.selectedFolder && state.selectedFolder !== 'ALL') {
+          expandToFolder(state.selectedFolder);
+        }
         if (state.expandedFolders.size === 0 && Array.isArray(state.tree)) {
           for (const r of state.tree) {
             state.expandedFolders.add(r.fullPath);
+            if (Array.isArray(r.children)) {
+              for (const c of r.children) {
+                state.expandedFolders.add(c.fullPath);
+              }
+            }
           }
         }
         document.getElementById('chkSubfolders').checked = Boolean(state.includeSubfolders);
         renderFolderTree();
+        setTimeout(() => {
+          const activeEl = document.querySelector('.tree-item.active');
+          if (activeEl) activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 50);
       }
     });
 
@@ -775,7 +842,13 @@ class ConversationExplorerViewProvider {
       }
     });
 
+    renderFolderTree();
     vscode.postMessage({ type: 'ready' });
+    setTimeout(() => {
+      if (!state.tree || state.tree.length === 0) {
+        vscode.postMessage({ type: 'ready' });
+      }
+    }, 350);
   </script>
 </body>
 </html>`;
