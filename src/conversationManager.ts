@@ -563,6 +563,204 @@ export class ConversationManagerProvider {
         } catch (_) {}
     }
 
+    private static _buildSyncTitleMap(): Map<string, string> {
+        const map = new Map<string, string>();
+        try {
+            const items = ConversationManagerProvider.currentInstance?._conversations?.length
+                ? ConversationManagerProvider.currentInstance._conversations
+                : ConversationManagerProvider.readDiskCache();
+            const userMeta = ConversationManagerProvider.readUserMetadata();
+            for (const item of items) {
+                if (!item?.id) continue;
+                const t = (userMeta[item.id]?.userTitle || item.userTitle || item.title || '').trim();
+                if (t && !t.startsWith('Conversation ')) {
+                    map.set(item.id, t);
+                }
+            }
+        } catch {}
+        return map;
+    }
+
+    private static _getConvDbStats(convDir: string, id: string): { exists: boolean; totalBytes: number; newestMtimeMs: number } {
+        const mainDb = path.join(convDir, `${id}.db`);
+        if (!fs.existsSync(mainDb)) return { exists: false, totalBytes: 0, newestMtimeMs: 0 };
+        let totalBytes = 0;
+        let newestMtimeMs = 0;
+        for (const ext of ['.db', '.db-wal']) {
+            const f = path.join(convDir, `${id}${ext}`);
+            if (fs.existsSync(f)) {
+                try {
+                    const st = fs.statSync(f);
+                    totalBytes += st.size;
+                    if (st.mtimeMs > newestMtimeMs) newestMtimeMs = st.mtimeMs;
+                } catch {}
+            }
+        }
+        return { exists: true, totalBytes, newestMtimeMs };
+    }
+
+    private static _copyConvDbFiles(srcDir: string, dstDir: string, id: string): boolean {
+        if (!fs.existsSync(dstDir)) fs.mkdirSync(dstDir, { recursive: true });
+        let copied = false;
+        for (const ext of ['.db', '.db-shm', '.db-wal']) {
+            const sf = path.join(srcDir, `${id}${ext}`);
+            const df = path.join(dstDir, `${id}${ext}`);
+            if (fs.existsSync(sf)) {
+                try {
+                    fs.copyFileSync(sf, df);
+                    copied = true;
+                } catch {}
+            } else if (ext !== '.db' && fs.existsSync(df)) {
+                try { fs.unlinkSync(df); } catch {}
+            }
+        }
+        return copied;
+    }
+
+    private static _ensureAppAnnotationTitle(appBase: string, id: string, title?: string): void {
+        if (!title) return;
+        try {
+            const annDir = path.join(appBase, 'annotations');
+            if (!fs.existsSync(annDir)) fs.mkdirSync(annDir, { recursive: true });
+            const annFile = path.join(annDir, `${id}.pbtxt`);
+            const escaped = title.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r?\n/g, ' ');
+            const nowSec = Math.floor(Date.now() / 1000);
+
+            if (!fs.existsSync(annFile)) {
+                fs.writeFileSync(annFile, `title:"${escaped}"  last_user_view_time:{seconds:${nowSec}  nanos:0}`, 'utf8');
+                return;
+            }
+            const existing = fs.readFileSync(annFile, 'utf8');
+            if (!/(?:^|\s)title\s*:/.test(existing)) {
+                fs.writeFileSync(annFile, `title:"${escaped}"  ${existing.trimStart()}`, 'utf8');
+            }
+        } catch {}
+    }
+
+    private static _batchUpdateAppSummaries(appBase: string, titleUpdates: Array<[string, string]>): void {
+        if (!titleUpdates.length) return;
+        const sumDb = path.join(appBase, 'conversation_summaries.db');
+        if (!fs.existsSync(sumDb)) return;
+        try {
+            const { execFileSync } = require('child_process');
+            const script = [
+                'import sys, json, sqlite3',
+                'db_path = sys.argv[1]',
+                'updates = json.loads(sys.stdin.read())',
+                'conn = sqlite3.connect(db_path, timeout=3.0)',
+                'cur = conn.cursor()',
+                'for cid, title in updates:',
+                '    cur.execute("UPDATE conversation_summaries SET title = ? WHERE conversation_id = ? AND (title IS NULL OR title = \'\')", (title, cid))',
+                'conn.commit()',
+                'conn.close()',
+            ].join('\n');
+            execFileSync('python3', ['-c', script, sumDb], {
+                input: JSON.stringify(titleUpdates),
+                stdio: ['pipe', 'ignore', 'ignore'],
+                timeout: 8000,
+            });
+        } catch {}
+    }
+
+    private static _syncOneConversation(
+        id: string,
+        ideBase: string,
+        appBase: string,
+        titleMap: Map<string, string>,
+        summaryTitleUpdates: Array<[string, string]>
+    ): 'toApp' | 'toIde' | 'updated' | 'unchanged' {
+        const ideBrain = path.join(ideBase, 'brain', id);
+        const appBrain = path.join(appBase, 'brain', id);
+        const ideConv = path.join(ideBase, 'conversations');
+        const appConv = path.join(appBase, 'conversations');
+
+        const hasIdeBrain = fs.existsSync(ideBrain);
+        const hasAppBrain = fs.existsSync(appBrain);
+        const ideDb = ConversationManagerProvider._getConvDbStats(ideConv, id);
+        const appDb = ConversationManagerProvider._getConvDbStats(appConv, id);
+        const title = titleMap.get(id);
+
+        if ((hasIdeBrain || ideDb.exists) && !hasAppBrain && !appDb.exists) {
+            if (hasIdeBrain) {
+                try { fs.cpSync(ideBrain, appBrain, { recursive: true }); } catch {}
+            }
+            if (ideDb.exists) {
+                ConversationManagerProvider._copyConvDbFiles(ideConv, appConv, id);
+            }
+            ConversationManagerProvider._ensureAppAnnotationTitle(appBase, id, title);
+            if (title) summaryTitleUpdates.push([id, title]);
+            return 'toApp';
+        }
+
+        if ((hasAppBrain || appDb.exists) && !hasIdeBrain && !ideDb.exists) {
+            if (hasAppBrain) {
+                try { fs.cpSync(appBrain, ideBrain, { recursive: true }); } catch {}
+            }
+            if (appDb.exists) {
+                ConversationManagerProvider._copyConvDbFiles(appConv, ideConv, id);
+            }
+            return 'toIde';
+        }
+
+        let updated = false;
+        const ideLog = path.join(ideBrain, '.system_generated', 'logs', 'transcript.jsonl');
+        const appLog = path.join(appBrain, '.system_generated', 'logs', 'transcript.jsonl');
+        const ideLogFull = path.join(ideBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
+        const appLogFull = path.join(appBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
+
+        if (fs.existsSync(ideLog) && fs.existsSync(appLog)) {
+            try {
+                const ideSize = fs.statSync(ideLog).size;
+                const appSize = fs.statSync(appLog).size;
+                if (ideSize > appSize + 32) {
+                    fs.copyFileSync(ideLog, appLog);
+                    if (fs.existsSync(ideLogFull)) fs.copyFileSync(ideLogFull, appLogFull);
+                    updated = true;
+                } else if (appSize > ideSize + 32) {
+                    fs.copyFileSync(appLog, ideLog);
+                    if (fs.existsSync(appLogFull)) fs.copyFileSync(appLogFull, ideLogFull);
+                    updated = true;
+                }
+            } catch {}
+        } else if (fs.existsSync(ideLog) && !fs.existsSync(appLog)) {
+            const logDir = path.dirname(appLog);
+            if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+            try {
+                fs.copyFileSync(ideLog, appLog);
+                if (fs.existsSync(ideLogFull)) fs.copyFileSync(ideLogFull, appLogFull);
+                updated = true;
+            } catch {}
+        } else if (!fs.existsSync(ideLog) && fs.existsSync(appLog)) {
+            const logDir = path.dirname(ideLog);
+            if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+            try {
+                fs.copyFileSync(appLog, ideLog);
+                if (fs.existsSync(appLogFull)) fs.copyFileSync(appLogFull, ideLogFull);
+                updated = true;
+            } catch {}
+        }
+
+        if (ideDb.exists && !appDb.exists) {
+            if (ConversationManagerProvider._copyConvDbFiles(ideConv, appConv, id)) updated = true;
+        } else if (!ideDb.exists && appDb.exists) {
+            if (ConversationManagerProvider._copyConvDbFiles(appConv, ideConv, id)) updated = true;
+        } else if (ideDb.exists && appDb.exists) {
+            // Both exist: sync the newer/larger database (including .db-wal)
+            if (ideDb.totalBytes > appDb.totalBytes + 4096 || (ideDb.newestMtimeMs > appDb.newestMtimeMs + 5000 && ideDb.totalBytes >= appDb.totalBytes)) {
+                if (ConversationManagerProvider._copyConvDbFiles(ideConv, appConv, id)) updated = true;
+            } else if (appDb.totalBytes > ideDb.totalBytes + 4096 || (appDb.newestMtimeMs > ideDb.newestMtimeMs + 5000 && appDb.totalBytes >= ideDb.totalBytes)) {
+                if (ConversationManagerProvider._copyConvDbFiles(appConv, ideConv, id)) updated = true;
+            }
+        }
+
+        if (hasAppBrain || appDb.exists || ideDb.exists) {
+            ConversationManagerProvider._ensureAppAnnotationTitle(appBase, id, title);
+            if (title) summaryTitleUpdates.push([id, title]);
+        }
+
+        return updated ? 'updated' : 'unchanged';
+    }
+
     public static async syncConversations(): Promise<{ syncedToIde: number; syncedToApp: number; updated: number }> {
         const ideBase = path.join(os.homedir(), '.gemini', 'antigravity-ide');
         const appBase = path.join(os.homedir(), '.gemini', 'antigravity');
@@ -578,32 +776,24 @@ export class ConversationManagerProvider {
         if (!fs.existsSync(appConv)) fs.mkdirSync(appConv, { recursive: true });
 
         const allIds = new Set<string>();
-
-        // Collect IDs from IDE
-        if (fs.existsSync(ideBrain)) {
-            for (const f of fs.readdirSync(ideBrain)) {
-                if (f !== 'tempmediaStorage' && !f.startsWith('.')) allIds.add(f);
+        for (const dir of [ideBrain, appBrain]) {
+            if (fs.existsSync(dir)) {
+                for (const f of fs.readdirSync(dir)) {
+                    if (f !== 'tempmediaStorage' && !f.startsWith('.')) allIds.add(f);
+                }
             }
         }
-        if (fs.existsSync(ideConv)) {
-            for (const f of fs.readdirSync(ideConv)) {
-                if (f.endsWith('.db')) allIds.add(f.replace('.db', ''));
-            }
-        }
-
-        // Collect IDs from App
-        if (fs.existsSync(appBrain)) {
-            for (const f of fs.readdirSync(appBrain)) {
-                if (f !== 'tempmediaStorage' && !f.startsWith('.')) allIds.add(f);
-            }
-        }
-        if (fs.existsSync(appConv)) {
-            for (const f of fs.readdirSync(appConv)) {
-                if (f.endsWith('.db')) allIds.add(f.replace('.db', ''));
+        for (const dir of [ideConv, appConv]) {
+            if (fs.existsSync(dir)) {
+                for (const f of fs.readdirSync(dir)) {
+                    if (f.endsWith('.db')) allIds.add(f.replace('.db', ''));
+                }
             }
         }
 
         const stats = { syncedToIde: 0, syncedToApp: 0, updated: 0 };
+        const titleMap = ConversationManagerProvider._buildSyncTitleMap();
+        const summaryTitleUpdates: Array<[string, string]> = [];
 
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
@@ -620,119 +810,13 @@ export class ConversationManagerProvider {
                     increment: (1 / (idList.length || 1)) * 100
                 });
 
-                const srcIdeBrain = path.join(ideBrain, id);
-                const srcAppBrain = path.join(appBrain, id);
-                const hasIdeBrain = fs.existsSync(srcIdeBrain);
-                const hasAppBrain = fs.existsSync(srcAppBrain);
-
-                const srcIdeDb = path.join(ideConv, `${id}.db`);
-                const srcAppDb = path.join(appConv, `${id}.db`);
-                const hasIdeDb = fs.existsSync(srcIdeDb);
-                const hasAppDb = fs.existsSync(srcAppDb);
-
-                // Case 1: In IDE only -> copy to App
-                if ((hasIdeBrain || hasIdeDb) && !hasAppBrain && !hasAppDb) {
-                    if (hasIdeBrain) {
-                        try {
-                            fs.cpSync(srcIdeBrain, srcAppBrain, { recursive: true });
-                        } catch {}
-                    }
-                    if (hasIdeDb) {
-                        for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                            const sf = path.join(ideConv, `${id}${ext}`);
-                            const df = path.join(appConv, `${id}${ext}`);
-                            if (fs.existsSync(sf)) {
-                                try { fs.copyFileSync(sf, df); } catch {}
-                            }
-                        }
-                    }
-                    stats.syncedToApp++;
-                    continue;
-                }
-
-                // Case 2: In App only -> copy to IDE
-                if ((hasAppBrain || hasAppDb) && !hasIdeBrain && !hasIdeDb) {
-                    if (hasAppBrain) {
-                        try {
-                            fs.cpSync(srcAppBrain, srcIdeBrain, { recursive: true });
-                        } catch {}
-                    }
-                    if (hasAppDb) {
-                        for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                            const sf = path.join(appConv, `${id}${ext}`);
-                            const df = path.join(ideConv, `${id}${ext}`);
-                            if (fs.existsSync(sf)) {
-                                try { fs.copyFileSync(sf, df); } catch {}
-                            }
-                        }
-                    }
-                    stats.syncedToIde++;
-                    continue;
-                }
-
-                // Case 3: Both exist -> compare and update
-                let updated = false;
-
-                const ideLog = path.join(srcIdeBrain, '.system_generated', 'logs', 'transcript.jsonl');
-                const appLog = path.join(srcAppBrain, '.system_generated', 'logs', 'transcript.jsonl');
-                const ideLogFull = path.join(srcIdeBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
-                const appLogFull = path.join(srcAppBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
-
-                if (fs.existsSync(ideLog) && fs.existsSync(appLog)) {
-                    try {
-                        const ideSize = fs.statSync(ideLog).size;
-                        const appSize = fs.statSync(appLog).size;
-                        if (ideSize > appSize + 32) {
-                            fs.copyFileSync(ideLog, appLog);
-                            if (fs.existsSync(ideLogFull)) fs.copyFileSync(ideLogFull, appLogFull);
-                            updated = true;
-                        } else if (appSize > ideSize + 32) {
-                            fs.copyFileSync(appLog, ideLog);
-                            if (fs.existsSync(appLogFull)) fs.copyFileSync(appLogFull, ideLogFull);
-                            updated = true;
-                        }
-                    } catch {}
-                } else if (fs.existsSync(ideLog) && !fs.existsSync(appLog)) {
-                    const logDir = path.dirname(appLog);
-                    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-                    try {
-                        fs.copyFileSync(ideLog, appLog);
-                        if (fs.existsSync(ideLogFull)) fs.copyFileSync(ideLogFull, appLogFull);
-                        updated = true;
-                    } catch {}
-                } else if (!fs.existsSync(ideLog) && fs.existsSync(appLog)) {
-                    const logDir = path.dirname(ideLog);
-                    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-                    try {
-                        fs.copyFileSync(appLog, ideLog);
-                        if (fs.existsSync(appLogFull)) fs.copyFileSync(appLogFull, ideLogFull);
-                        updated = true;
-                    } catch {}
-                }
-
-                // Copy missing DB files
-                if (hasIdeDb && !hasAppDb) {
-                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                        const sf = path.join(ideConv, `${id}${ext}`);
-                        const df = path.join(appConv, `${id}${ext}`);
-                        if (fs.existsSync(sf)) {
-                            try { fs.copyFileSync(sf, df); } catch {}
-                        }
-                    }
-                    updated = true;
-                } else if (!hasIdeDb && hasAppDb) {
-                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                        const sf = path.join(appConv, `${id}${ext}`);
-                        const df = path.join(ideConv, `${id}${ext}`);
-                        if (fs.existsSync(sf)) {
-                            try { fs.copyFileSync(sf, df); } catch {}
-                        }
-                    }
-                    updated = true;
-                }
-
-                if (updated) stats.updated++;
+                const outcome = ConversationManagerProvider._syncOneConversation(id, ideBase, appBase, titleMap, summaryTitleUpdates);
+                if (outcome === 'toApp') stats.syncedToApp++;
+                else if (outcome === 'toIde') stats.syncedToIde++;
+                else if (outcome === 'updated') stats.updated++;
             }
+
+            ConversationManagerProvider._batchUpdateAppSummaries(appBase, summaryTitleUpdates);
         });
 
         if (ConversationManagerProvider.currentInstance) {
@@ -752,101 +836,18 @@ export class ConversationManagerProvider {
             const ideBase = path.join(os.homedir(), '.gemini', 'antigravity-ide');
             const appBase = path.join(os.homedir(), '.gemini', 'antigravity');
 
-            const ideBrain = path.join(ideBase, 'brain', id);
-            const appBrain = path.join(appBase, 'brain', id);
-            const ideConvDir = path.join(ideBase, 'conversations');
-            const appConvDir = path.join(appBase, 'conversations');
+            const hasIde = fs.existsSync(path.join(ideBase, 'brain', id)) || fs.existsSync(path.join(ideBase, 'conversations', `${id}.db`));
+            const hasApp = fs.existsSync(path.join(appBase, 'brain', id)) || fs.existsSync(path.join(appBase, 'conversations', `${id}.db`));
 
-            const hasIdeBrain = fs.existsSync(ideBrain);
-            const hasAppBrain = fs.existsSync(appBrain);
-            const hasIdeDb = fs.existsSync(path.join(ideConvDir, `${id}.db`));
-            const hasAppDb = fs.existsSync(path.join(appConvDir, `${id}.db`));
-
-            if (!hasIdeBrain && !hasIdeDb && !hasAppBrain && !hasAppDb) {
+            if (!hasIde && !hasApp) {
                 vscode.window.showWarningMessage(`No conversation data found on disk for ${id}.`);
                 return false;
             }
 
-            // Sync from IDE to App if missing in App
-            if ((hasIdeBrain || hasIdeDb) && !hasAppBrain && !hasAppDb) {
-                if (hasIdeBrain) {
-                    if (!fs.existsSync(path.dirname(appBrain))) fs.mkdirSync(path.dirname(appBrain), { recursive: true });
-                    fs.cpSync(ideBrain, appBrain, { recursive: true });
-                }
-                if (hasIdeDb) {
-                    if (!fs.existsSync(appConvDir)) fs.mkdirSync(appConvDir, { recursive: true });
-                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                        const sf = path.join(ideConvDir, `${id}${ext}`);
-                        const df = path.join(appConvDir, `${id}${ext}`);
-                        if (fs.existsSync(sf)) {
-                            try { fs.copyFileSync(sf, df); } catch {}
-                        }
-                    }
-                }
-            } else if ((hasAppBrain || hasAppDb) && !hasIdeBrain && !hasIdeDb) {
-                // Sync from App to IDE if missing in IDE
-                if (hasAppBrain) {
-                    if (!fs.existsSync(path.dirname(ideBrain))) fs.mkdirSync(path.dirname(ideBrain), { recursive: true });
-                    fs.cpSync(appBrain, ideBrain, { recursive: true });
-                }
-                if (hasAppDb) {
-                    if (!fs.existsSync(ideConvDir)) fs.mkdirSync(ideConvDir, { recursive: true });
-                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                        const sf = path.join(appConvDir, `${id}${ext}`);
-                        const df = path.join(ideConvDir, `${id}${ext}`);
-                        if (fs.existsSync(sf)) {
-                            try { fs.copyFileSync(sf, df); } catch {}
-                        }
-                    }
-                }
-            } else {
-                // Both exist: check and update transcript
-                const ideLog = path.join(ideBrain, '.system_generated', 'logs', 'transcript.jsonl');
-                const appLog = path.join(appBrain, '.system_generated', 'logs', 'transcript.jsonl');
-                const ideLogFull = path.join(ideBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
-                const appLogFull = path.join(appBrain, '.system_generated', 'logs', 'transcript_full.jsonl');
-
-                if (fs.existsSync(ideLog) && fs.existsSync(appLog)) {
-                    try {
-                        const ideSize = fs.statSync(ideLog).size;
-                        const appSize = fs.statSync(appLog).size;
-                        if (ideSize > appSize + 32) {
-                            fs.copyFileSync(ideLog, appLog);
-                            if (fs.existsSync(ideLogFull)) fs.copyFileSync(ideLogFull, appLogFull);
-                        } else if (appSize > ideSize + 32) {
-                            fs.copyFileSync(appLog, ideLog);
-                            if (fs.existsSync(appLogFull)) fs.copyFileSync(appLogFull, ideLogFull);
-                        }
-                    } catch {}
-                } else if (fs.existsSync(ideLog) && !fs.existsSync(appLog)) {
-                    const logDir = path.dirname(appLog);
-                    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-                    fs.copyFileSync(ideLog, appLog);
-                    if (fs.existsSync(ideLogFull)) fs.copyFileSync(ideLogFull, appLogFull);
-                } else if (!fs.existsSync(ideLog) && fs.existsSync(appLog)) {
-                    const logDir = path.dirname(ideLog);
-                    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-                    fs.copyFileSync(appLog, ideLog);
-                    if (fs.existsSync(appLogFull)) fs.copyFileSync(appLogFull, ideLogFull);
-                }
-
-                // Copy missing DB files
-                if (hasIdeDb && !hasAppDb) {
-                    if (!fs.existsSync(appConvDir)) fs.mkdirSync(appConvDir, { recursive: true });
-                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                        const sf = path.join(ideConvDir, `${id}${ext}`);
-                        const df = path.join(appConvDir, `${id}${ext}`);
-                        if (fs.existsSync(sf)) try { fs.copyFileSync(sf, df); } catch {}
-                    }
-                } else if (!hasIdeDb && hasAppDb) {
-                    if (!fs.existsSync(ideConvDir)) fs.mkdirSync(ideConvDir, { recursive: true });
-                    for (const ext of ['.db', '.db-shm', '.db-wal']) {
-                        const sf = path.join(appConvDir, `${id}${ext}`);
-                        const df = path.join(ideConvDir, `${id}${ext}`);
-                        if (fs.existsSync(sf)) try { fs.copyFileSync(sf, df); } catch {}
-                    }
-                }
-            }
+            const titleMap = ConversationManagerProvider._buildSyncTitleMap();
+            const summaryTitleUpdates: Array<[string, string]> = [];
+            ConversationManagerProvider._syncOneConversation(id, ideBase, appBase, titleMap, summaryTitleUpdates);
+            ConversationManagerProvider._batchUpdateAppSummaries(appBase, summaryTitleUpdates);
 
             // Reload conversations and refresh detail
             if (ConversationManagerProvider.currentInstance) {
